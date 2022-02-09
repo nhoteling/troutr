@@ -1,0 +1,224 @@
+---
+title: "troutr"
+author: "Nathan Hoteling"
+date: "1/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(stringdist)
+library(osmdata)
+library(ggplot2)
+
+library(textreuse)
+
+source("R/utils.R")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+va <- sf::st_read("data/gis/cb_2019_us_state_20m/cb_2019_us_state_20m.shp", quiet=TRUE) %>% 
+  filter(NAME=="Virginia") %>%
+  sf::st_transform(4326)
+
+vaco1 <- sf::st_read("data/gis/cb_2019_us_county_20m/cb_2019_us_county_20m.shp", quiet=TRUE) %>%
+  filter(STATEFP == "51") %>%
+  sf::st_transform(4326)
+
+# combine City/County with same name, to avoid confusion
+vaco2 <- vaco1 %>% group_by(NAME) %>% summarise(geometry = sf::st_union(geometry))
+
+df.trout <- readRDS("data/rds/dftrout.rds")
+```
+
+
+<hr>
+<br>
+
+
+# Appendix
+
+## Geolocation of water bodies
+
+Trout waters in Virginia can be browsed on an [interactive map](https://dgif-virginia.maps.arcgis.com/apps/webappviewer/index.html?id=441ed456c8664166bb735b1db6024e48) available from VDWR, however the map doesn't provide the average user with a download functionality.  For this reason, we explore a couple of alternatives for determining trout-water locations.
+
+### VDEQ Data
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# First, download these files from:
+# https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets
+# Then read them with sf
+df.rvr <- sf::st_read("data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
+df.res <- sf::st_read("data/gis/Reservoirs_(2020_Final_WQA_IR_Assessment)/Reservoirs_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
+
+# Compare names with trout stocking water bodies
+unq_names <- unique(df.trout$waterbody1)
+df.mtch <- data.frame(nm = unq_names, 
+                      rvr_mtch = unq_names %in% df.rvr$WATER_NAME, 
+                      res_mtch = unq_names %in% df.res$WATER_NAME,
+                      stringsAsFactors = FALSE) %>%
+  mutate(mtch = rvr_mtch | res_mtch)
+
+
+# Fuzzy matching via string distance measures
+x <- unique( c(df.rvr$WATER_NAME, df.res$WATER_NAME) )
+d <- lapply(1:nrow(df.mtch), function(i) {
+  s <- df.mtch$nm[i]
+  jw <- stringdist::stringdist(s,x, method="jw")
+  lv <- stringdist::stringdist(s,x, method="lv")
+  df <- data.frame(nm = s,
+                   water_name_jw = x[which.min(jw)],
+                   jw_dist = jw[which.min(jw)],
+                   water_name_lv = x[which.min(lv)],
+                   lv_dist = lv[which.min(lv)],
+                   stringsAsFactors = FALSE)
+})
+df.mtch2 <- df.mtch %>% left_join(do.call(rbind,d), by="nm")
+
+
+# Try osmdata for geocoding
+#d <- lapply(1:nrow(df.mtch), function(i) {
+#  s <- paste(df.mtch$nm[i], ", VA",sep="")
+#  q <- osmdata::getbb(s) %>% bbox_to_pgon()
+#  df <- data.frame(nm=df.mtch$nm[i], osm=q %>% sf::st_sfc() %>% sf::st_set_crs(4326))
+#})
+#df.mtch3 <- df.mtch2 %>% left_join(do.call(rbind,d), by="nm")
+
+```
+
+
+The Virginia Department of Environmental Quality (VDEQ) maintains an up-to-date [collection of datasets](https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets) related to rivers/streams, and lakes/reservoirs, plus a variety of other features.  The rivers/streams dataset includes spatial data associated with over `r unique(df.rvr$WATER_NAME) %>% length() %>% signif(digits=1) %>% format(big.mark=",")` unique bodies of water, and the lakes/reservoirs dataset includes around `r unique(df.res$WATER_NAME) %>% length() %>% signif(digits=1) %>% format(big.mark=",")`.  
+
+Matching water bodies between datasets is not a trivial task.  Even for "standard" datasets like these there are typos, alternative spellings, and multiple water bodies with the same or similar names.  For example, only `r 100*(df.mtch %>% filter(mtch==TRUE) %>% nrow() / nrow(df.mtch)) %>% round(digits=0)`% of the water bodies identified in the trout stocking data contain an exact name match in the VDEQ dataset, and even this doesn't necessarily imply a one-to-one comparison.  The VDEQ data contain multiple listings for each body of water, each of which represents a segment of the water body.  
+
+
+### Minhash and locality-sensitive hashing
+
+We can carry out most of the necessary steps for minhashing and LSH with the `textreuse` package.  However, the functions implemented for that package appear to only tokenize by _word_, whereas we will want to tokenize by _character_.  Hence, we carry out a quick pre-processing step via the `tokenizers` package followed by some minor manipulations that will allow us to trick the functions into doing what we want.
+
+```{r}
+
+df.rvr2 <- df.rvr %>%
+  dplyr::select(OBJECTID, ID305B, MILES, WATER_NAME, LOCATION) %>%               # down-select cols
+  mutate(ngrams     = tokenizers::tokenize_character_shingles(WATER_NAME,        # tokenize by ngram
+                                                              n=4,
+                                                              strip_non_alphanum=FALSE,simplify=TRUE),  
+         len        = purrr::map_int(ngrams, length),                            # number of tokens
+         txt_tokens = purrr::map_chr(ngrams, str_c,collapse=" "))                # prep for minhash
+
+df.trt2 <- df.trout %>%
+  dplyr::select(waterbody1, waterbody2, specialtype, county) %>%
+  distinct() %>%
+  mutate(ngrams = tokenizers::tokenize_character_shingles(waterbody1, n=4,
+                                                          strip_non_alphanum=FALSE,
+                                                          simplify=TRUE),
+         len = purrr::map_int(ngrams, length),
+         txt_tokens = purrr::map_chr(ngrams, str_c, collapse=" "),
+         idx = paste0("trt-",row_number()))
+```
+
+Before moving on to minhashing proper, we should take a look at the number of "words" for each row in the dataset, where the "words" are actually ngrams derived in the step above,
+
+```{r, out.width="50%", echo=FALSE, message=FALSE, warning=FALSE, fig.pos="hold"}
+df.rvr2 %>% 
+  ggplot() +
+  geom_histogram(aes(x=len), bins=25) +
+  lims(x=c(0,50)) +
+  labs(title="VA Water Bodies", x = "Number of ngrams per row", y="Count") +
+  theme_minimal()
+
+df.trt2 %>% 
+  ggplot() +
+  geom_histogram(aes(x=len), bins=25) +
+  lims(x=c(0,50)) +
+  labs(title="Trout Waters", x = "Number of ngrams per row", y="Count") +
+  theme_minimal()
+```
+
+The minhash workflow here is based largely on the `textreuse` package [vignette](https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html).  We start by generating a minhash function and using that to create a document corpus containing all of the minhashed text strings.  The minhash function converts a collection of tokens (ngrams in our case) into `n` randomly selected hashes.  In the present dataset, there are `r df.rvr2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` unique ngrams derived from the water body names, which are mapped to 240 hashes.
+
+```{r}
+# Create minhash function
+minhash <- textreuse::minhash_generator(n=240, seed=1234)
+
+
+# Create a named vector of tokens for each row
+vec_tokens <- c(df.rvr2$txt_tokens, df.trt2$txt_tokens)
+names(vec_tokens) <- c(df.rvr2$ID305B, df.trt2$idx)
+
+
+# Generate corpus
+corpus <- textreuse::TextReuseCorpus(text = vec_tokens, tokenizer = tokenizers::tokenize_ngrams, n = 4,
+                          minhash_func = minhash, keep_tokens = TRUE,
+                          progress = FALSE, simplify=TRUE)
+```
+
+Now, we calculate the locality-sensitive hashes for our corpus.  First, we need to determine what threshold we want to set for the Jaccard similarity, because this determines the number bands to use in the lsh function.  The number of bands needs to be divisible by the number of hashes, so some of our options are,
+
+```{r, echo=FALSE, out.width="25%"}
+v <- c(10, 15, 30, 40, 60, 80, 120, 240)
+d <- lapply(1:length(v), function(i) {
+  lsh_threshold(h=240, b=v[i])
+})
+data.frame(b = v, similarity = unlist(d) %>% round(digits=3)) %>%
+  kableExtra::kbl() %>%
+  kableExtra::kable_paper() %>%
+  kableExtra::kable_styling(full_width=FALSE)
+```
+
+We will select $b = 40$ which theoretically should limit us to Jaccard similarity greater than around 0.50. 
+
+```{r}
+buckets_040    <- lsh(corpus, bands = 40, progress = FALSE)
+candidates_040 <- lsh_candidates(buckets_040) %>% mutate(bands=40)
+```
+
+The `candidates` object is a data frame which includes the respective candidate pairs.  We can pipe this into the function `lsh_compare()` to determine the similarity scores for each pair.
+
+```{r}
+df.compare <- candidates_040 %>% filter(a %in% df.trt2$idx) %>%
+  lsh_compare(corpus, jaccard_similarity, progress=FALSE) %>%
+  arrange(a,desc(score))
+```
+
+Now we take a look at the number of candidates from the VDWQ water data that are potential candidates for each of the trout waters identified previously,
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="50%", fig.show="hold"}
+df.compare %>%
+  #bind_rows(candidates_060, candidates_080) %>%
+  group_by(a,bands) %>%
+  count() %>%
+  ggplot() +
+  geom_histogram(aes(x=n), bins=101) +
+  lims(x=c(0,100)) +
+  labs(x="Number of Candidates", y="Count") +
+  #facet_wrap(~bands, ncol=1) +
+  theme_minimal()
+
+df.compare %>%
+  ggplot() +
+  geom_histogram(aes(x=score), bins=100) +
+  theme_minimal()
+
+#candi <- function(i) {
+#  df.rvr2 %>% 
+#  filter(ID305B %in% (compare %>% filter(a==df.trt2$idx[i]) %>% pull(b))) %>% pull(WATER_NAME)
+#}
+```
+
+Interestingly, there are plenty of similarities scores below the theoretical limit that was around 0.50, however most of the scores are 1.0.
+
+
+## References
+
+<ul>
+  <li>MinHash vignette for the `textreuse` package [here](https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html)</li>
+  <li>MinHash for dummies [post](http://matthewcasperson.blogspot.com/2013/11/minhash-for-dummies.html)</li>
+  <li>A [Medium article](https://towardsdatascience.com/locality-sensitive-hashing-how-to-find-similar-items-in-a-large-set-with-precision-d907c52b05fc) on locality-sensitive hashing</li>
+  <li>Comments on using `tokenizers` output with `textreuse` [here](https://github.com/ropensci/textreuse/issues/75)</li>
+</ul>

@@ -1,0 +1,291 @@
+---
+title: "Trout Stocking in Virginia"
+author: "Nathan Hoteling"
+date: "1/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(stringdist)
+library(osmdata)
+library(ggplot2)
+library(lubridate)
+library(forecast)
+source("R/utils.R")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+va <- sf::st_read("data/gis/cb_2019_us_state_20m/cb_2019_us_state_20m.shp", quiet=TRUE) %>% 
+  filter(NAME=="Virginia") %>%
+  sf::st_transform(4326)
+
+vaco <- sf::st_read("data/gis/cb_2019_us_county_20m/cb_2019_us_county_20m.shp", quiet=TRUE) %>%
+  filter(STATEFP == "51") %>%
+  sf::st_transform(4326)
+
+# combine City/County with same name, to avoid confusion
+vaco2 <- vaco %>% group_by(NAME) %>% summarise(geometry = sf::st_union(geometry))
+
+
+# Locations, manually determined from interactive map on dwr website
+df.locs <- readr::read_csv("data/water_body_locs.csv") %>%
+  mutate(geometry = crd_to_points(lon,lat))
+```
+
+
+<hr>
+
+The goal here is to see if we can predict when and where trout stocking will take place on a given date in the state of Virginia.
+
+<br>
+
+## Data
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+
+# Time bounds
+# data goes back to 2015
+start_date <- as.POSIXct("2015-01-01")  
+end_date <- Sys.time()   
+
+# Download the data; takes a hot minute
+res <- build_trout_url(start_date, end_date) %>%   
+  xml2::read_html(url1) %>% 
+  rvest::html_table(fill=TRUE)
+
+# Clean the data
+df.trout <- res[[2]] %>% cleanup_trout_data()
+
+# Save for later use
+saveRDS(df.trout, "data/rds/dftrout.rds")
+```
+
+```{r, echo=FALSE}
+df.trout <- readRDS("data/rds/dftrout.rds")
+```
+
+
+The trout stocking schedule is posted on the Virginia Department of Wildlife Recreation (VDWR) [website](https://dwr.virginia.gov/fishing/trout-stocking-schedule/) and updated regularly during the trout seasons.  The date range presented on the table is user-configurable back to around `r min(df.trout$date) %>% format("%B %Y")` and, since a custom date range can be specified in the url, the data were downloaded with some simple webscraping.  The resulting dataset includes `r nrow(df.trout) %>% format(big.mark=",")` stocking events over `r unique(df.trout$waterbody1) %>% length()` unique bodies of water (although the number of unique locations is greater since some of these bodies of water are divided into multiple unique segments).
+
+Geocoding the trout stocking locations was more challenging.  The DWR website offers an [interactive map]() that allows users to search and view the appropriate water bodies, but there doesn't appear to be a straightforward way to export these for offline use.  Instead, the water bodies identified from the stocking schedule were manually searched on the map and the coordinates were recorded manually in an external file.  See Appendix for more details on the geocoding process.
+
+<br>
+
+## Gross Trends
+
+To get a general idea for any features and trends that exist in the data, we carry out a quick visual exploration of the data collected thus far.  This initial exploration will help steer the modelling efforts that will be conducted later.
+
+### Temporal Structure
+
+The chart below shows the number of weekly trout stocking reported over the course of the year.  A quick look at this plot reveals some overall trends, namely that Virginia waterways are most heavily stocked in the Springtime, lightly stocked in the Winter and Fall, and not stocked at all during the Summer.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+lev <- c("A","B","C","+","U","DH","","CR")
+df.stk <- df.trout %>%
+  mutate(wk = lubridate::week(date),
+         wk2 = as.Date(paste(2021, wk-1, 1, sep="-"), "%Y-%U-%u"),
+         yr = lubridate::year(date),
+         cgy = factor(Category, levels=rev(lev))) %>%
+  group_by(wk2, yr) %>%
+  count()
+  
+
+# Aggregate the data by week
+df.trt <- df.trout %>%
+  mutate(wk = lubridate::floor_date(date, "week", week_start=1)) %>%
+  group_by(wk) %>%
+  count()
+
+
+# Time-series decomposition
+x <- seq.Date(from = as.Date(min((df.trt$wk))), 
+              to   = as.Date(max(df.trt$wk)), 
+              by   = "week")
+df.ts <- data.frame(wk = x, nn=0) %>%
+  left_join(df.trt, by="wk") %>%
+  mutate(n = ifelse(is.na(n),0,n),
+         tot = n+nn) %>%
+  dplyr::select(wk,tot)
+
+
+fc.trt <- ts(df.ts$tot,
+             start=decimal_date(ymd(min(df.ts$wk))),
+             frequency=365.25/7) %>% decompose()
+
+
+df.fc <- data.frame(x = fc.trt$x,
+                    trend = fc.trt$trend,
+                    seasonal = fc.trt$seasonal - min(fc.trt$seasonal),
+                    random = fc.trt$random) %>%
+  cbind(wk=df.ts$wk) %>%
+  mutate(wk2 = week(wk)) %>%
+  group_by(wk2) %>%
+  summarise(seasonal = mean(seasonal)) %>%
+  mutate(wk3 = as.Date(paste(2021, wk2-1, 1, sep="-"), "%Y-%U-%u"),)
+
+
+
+# Plot: Weekly trout stockings
+p.tot <- df.ts %>%
+  mutate(wk2 = week(wk),
+         wk3 = as.Date(paste(2021, wk2-1, 1, sep="-"), "%Y-%U-%u"),) %>%
+  ggplot() +
+  geom_point(aes(x=wk3, y=tot), color="grey40") +
+  geom_line(data=df.fc, aes(x=wk3, y=seasonal), color="firebrick", alpha=0.6, size=1.0) +
+  labs(x="Date", y="Number of events per week") +
+  scale_x_date(date_labels="%b") +
+  theme_minimal()
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10}
+p.tot
+```
+
+<br>
+
+### Geographic Distribution
+
+The derived locations for each trout stocking location is plotted on the map below.  Inspection of this map clearly shows that trout waters are concentrated the in Western and Soutwestern parts of the state.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10}
+p.map <- ggplot() +
+  geom_sf(data=vaco, mapping=aes(geometry=geometry), size=0.2, fill="grey95", color="grey65") +
+  geom_sf(data=df.locs, mapping=aes(geometry=geometry), color="firebrick", alpha=0.7) +
+  scale_fill_gradient(low="#ecc6c6", high="#bf4040") +
+  theme_void()
+
+p.map
+```
+
+
+### Fine Structure
+
+The general temporal trends outlined above aren't the full story.  In fact, there are no fewer than eight sub-categories that undergo different levels of trout stocking.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+lev <- c("A","B","C","+","U","DH","X","CR")
+df.tmp <- data.frame( wk = seq(from=min(df.trout$date %>% week()), 
+                               to=max(df.trout$date %>% week()), 
+                               by=1), nn = 0)
+
+df.cgy <- df.trout %>%
+  mutate(Category = ifelse(Category=="","X",Category),
+         wk = lubridate::week(date),
+         #wk2 = as.Date(paste(2021, wk-1, 1, sep="-"), "%Y-%U-%u"),
+         #yr = lubridate::year(date),
+         cgy = factor(Category, levels=rev(lev))) %>%
+  group_by(cgy,wk) %>%
+  summarise(tot=n()) %>%
+  pivot_wider(id_cols=c("wk"), names_from=c("cgy"), values_from=c("tot"), values_fill=0) %>%
+  arrange(wk) %>%
+  full_join(df.tmp) %>%
+  dplyr::select(-nn)
+
+d <- lapply(2:(ncol(df.cgy)), function(i) {
+  x <- df.cgy %>% pull(i)
+  x[is.na(x)] <- 0
+  v <- RcppRoll::roll_mean(x, n=4, align="center", fill=NA)
+})
+df.cgy2 <- data.frame(wk=df.cgy$wk, do.call(cbind,d)) 
+names(df.cgy2) <- names(df.cgy)
+
+df.fne <- df.cgy2 %>% 
+  pivot_longer(cols=c("CR":"A")) %>%
+  mutate(value = ifelse(is.na(value), 0, value))
+
+p.fne <- ggplot(df.fne) +
+  geom_area(aes(x=wk, y=value,ymin=0, group=name), fill="firebrick", color="grey25", alpha=0.7) +
+  facet_wrap(~name, ncol=1, scales="free_y") +
+  labs(x="Week Number", y="Value") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank())
+
+p.fne
+```
+
+
+
+
+
+
+```{r, echo=FALSE, eval=FALSE}
+lev <- c("A","B","C","+","U","DH","","CR")
+df.trt2 <- df.trout %>%
+  mutate(wk = lubridate::week(date),
+         wk2 = as.Date(paste(2021, wk-1, 1, sep="-"), "%Y-%U-%u"),
+         yr = lubridate::year(date),
+         cgy = factor(Category, levels=rev(lev)))
+  
+# Weekly trout stockings by year
+p.stk <- df.trt2 %>%
+  filter(date > as.Date("2017-12-31") & date < as.Date("2022-01-01")) %>%
+  group_by(wk2, yr) %>%
+  count() %>%
+  ggplot() +
+  geom_tile(aes(x=wk2, y=yr, fill=n)) +
+  labs(x="Week", y="Year") +
+  scale_x_date(date_labels="%b") +
+  scale_fill_gradient(low="#ecc6c6", high="#bf4040") +
+  #facet_wrap(~yr, ncol=2) +
+  theme_minimal()
+
+p.stk2 <- df.trt2 %>%
+  filter(date > as.Date("2017-12-31") & date < as.Date("2022-01-01")) %>%
+  group_by(wk2) %>%
+  count() %>%
+  ggplot() +
+  geom_col(aes(x=wk2, y=n)) +
+  theme_minimal()
+
+# Weekly trout stocking by category
+p.cgy <- df.trt2 %>%
+  group_by(wk2, cgy) %>%
+  count() %>%
+  ggplot() +
+  geom_tile(aes(x=wk2, y=cgy, fill=n)) +
+  labs(x="Date", y="Category") +
+  scale_fill_gradient(low="#ecc6c6", high="#bf4040") +
+  scale_x_date(date_labels="%b") +
+  theme_minimal()
+
+# Weekly trout stocking by county
+p.cty <- df.trt %>%
+  group_by(wk2, county) %>%
+  count() %>%
+  ggplot() +
+  geom_tile(aes(x=wk2, y=county, fill=n)) +
+  labs(x="Date", y="County") +
+  scale_fill_gradient(low="#ecc6c6", high="#bf4040") +
+  scale_x_date(date_labels="%b") +
+  theme_minimal()
+
+p.spc <- df.trt %>%
+  group_by(wk2, specialtype) %>%
+  count() %>%
+  ggplot() +
+  geom_tile(aes(x=wk2, y=specialtype, fill=n)) +
+  labs(x="Date", y="SpecialType") +
+  scale_fill_gradient(low="#ecc6c6", high="#bf4040") +
+  scale_x_date(date_labels="%b") +
+  theme_minimal()
+```
+
+<br>
+
+## References
+
+<ul>
+  <li>Virginia Department of Wildlife Recreation [website](https://dwr.virginia.gov/fishing/trout-stocking-schedule/)</loi>
+  <li>Virginia Department of Wildlife Recreation [interactive map](https://dgif-virginia.maps.arcgis.com/apps/webappviewer/index.html?id=441ed456c8664166bb735b1db6024e48)</li>
+  <li>Virginia Department of Environmental Quality [datasets](https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets)</li>
+<ul>
+
+<hr>
+<br>
+<br>
