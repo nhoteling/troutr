@@ -7,5 +7,6 @@ Other goals / excuses for this project:
 <ul>
   <li>Spatio-temporal modeling</li>
   <li>Use fuzzy matching to identify common elements in different datasets</li> 
+  <li>Use Locality-sensitive hashing to identify common elements in different datasets</li>
   <li>Use `rayshader` to make cool maps</li>
 </ul>
