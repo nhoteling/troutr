@@ -146,7 +146,7 @@ df.deq %>%
 
 ```
 
-To a large degree these multiplicity issues can be resolved by filtering the data by county (whereas counties aren't explicitly listed in the VDEQ data, we derive these from shapes available from the [Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html)).  Rivers, however, may require an extra step towards disambiguation.  It's worth noting that around 75% of the names have only a single entry.
+To a large degree these multiplicity issues can be resolved by filtering the data by county (whereas counties aren't explicitly listed in the VDEQ data, we derive these from shapes available from the [Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html)).  Rivers, however, may require an extra step towards disambiguation.  Nevertheless, it's worth noting that around 75% of the names have only a single entry, so these problems shouldn't be too pervasive.
 
 
 ### Pairwise comparisons
@@ -186,7 +186,7 @@ DT_PR <- t1-t0
 
 ### Locality-sensitive hashing
 
-Locality-sensitive hashing is an approximate technique that can be used to reduce the search space in cases where pairwise comparisons between datasets may become intractable.  The datasets we are working with don't quite meet that threshold, however it is interesting to go through the mechanics of LSH anyway.
+Locality-sensitive hashing is an approximative technique that can be used to reduce the search space in cases where pairwise comparisons between datasets may become intractable.  The datasets we are working with don't quite meet that threshold, however it is interesting to go through the mechanics of LSH anyway.
 
 The overarching goal here is to use the LSH techniques to create a list of candidate pairs.  Most of the necessary steps are carried out with the `textreuse` package (however we will do some quick pre-processing to tokenize the water body names via `tokenizers` since the built-in functionality tokenizes by _word_ whereas we want to tokenize by _character_),
 
@@ -303,10 +303,14 @@ df.compare2 <- candidates_040 %>% filter(a %in% df.trt2$id) %>%
 
 Now that we've done essentially the same thing using direct pairwise comparisons and Locality-sensitive hashing, it is possible to compare the results of each.  
 
-First, ignoring some of the pre-processing steps, the Pairwise method took <b>`r DT_PR %>% as.numeric() %>% format(digits=0)` s</b> to run, whereas the LSH method took a total of <b>`r DT_LS %>% as.numeric() %>% format(digits=0)` s</b> to generate the corpus (`r DT_LS1 %>% as.numeric() %>% format(digits=1)`s), compute locality-sensitive hashes(`r DT_LS2 %>% as.numeric() %>% format(digits=1)`s), and carry out some light post-processing (`r DT_LS3 %>% as.numeric() %>% format(digits=1)`s).  
+First, ignoring some of the pre-processing steps, the Pairwise method took about <b>`r DT_PR %>% as.numeric() %>% format(digits=0)` s</b> to run, whereas the LSH method took <b>`r DT_LS %>% as.numeric() %>% format(digits=0)` s</b> to generate the corpus (`r DT_LS1 %>% as.numeric() %>% format(digits=1)`s), compute locality-sensitive hashes (`r DT_LS2 %>% as.numeric() %>% format(digits=1)`s), and carry out some light post-processing (`r DT_LS3 %>% as.numeric() %>% format(digits=1)`s).  
+
+It's not a completely fair comparison, and there may be more optimization to be carried out here.  For example, the pairwise method doesn't compare all records with all other records; instead it compares each record from the trout data to all records in the VDEQ data that are in the same county.  I haven't figured out how to add this blocking step ahead of the LSH workflow, so I do this as part of the post-processing step.  Not only that, but the corpus doesn't distinguish between datasets, so the LSH method is intrinsically comparing each record with all other records in both datasets.  There may be a better way to structure this, as the documentation for the `lsh()` function includes the statement, "it is possible, as long as one uses the same minhash function and the same number of bands, to combine the outputs from this function at different times".  With this in mind, I wonder if we can run the function on a subsets of the corpus??
 
 
+### Adjudication
 
+TODO
 
 <br>
 
