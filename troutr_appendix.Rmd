@@ -43,9 +43,15 @@ df.trout <- readRDS("data/rds/dftrout.rds")
 
 # Appendix
 
-## Geolocation of water bodies
+## Trout Water Locations
 
 Trout waters in Virginia can be browsed on an [interactive map](https://dgif-virginia.maps.arcgis.com/apps/webappviewer/index.html?id=441ed456c8664166bb735b1db6024e48) available from VDWR, however the map doesn't provide the average user with a download functionality.  For this reason, we explore a couple of alternatives for determining trout-water locations.
+
+### Brute Force
+
+At one point I became impatient with the inherent uncertainties involved with trying to match similarly named waterways between two datasets and resolved to simply brute-force my way through the trout water locations.  It was frustrating knowing that the locations were definitely recorded in a database somewhere, just not easily accessible to me.  This was a painful process: I literally pasted each "trout water" into the search bar on the interactive map, navigated to the appropriate search result, dropped a pin on the location, and copied the relevant coordinates.  
+
+As painful as this was, it was manageable (it took about 3-ish hours), and very illuminating.  For example, I found a handful of inconsistencies like misspellings, alternative names, or missing waterways.  In some cases I resorted to a manual google-maps search to help narrow the field and made a judgement call as to where the waterway likely was.  In all cases I entered a discrete point, even though many of the waterways are rivers and streams and trout stocking may be carried out at a variety of locations.  In one case I wasn't able to find the location at all because the name, "Forest Service Office Youth Ponds" was very much ambiguous (and I couldn't find where the Forest Service Office is located); in that case I used the center of the respective county. 
 
 ### VDEQ Data
 
