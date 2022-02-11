@@ -63,7 +63,8 @@ res <- build_trout_url(start_date, end_date) %>%
 df.trout <- res[[2]] %>% cleanup_trout_data()
 
 # Save for later use
-saveRDS(df.trout, "data/rds/dftrout.rds")
+saveRDS(df.trout, "data/rds/df_trout.rds")
+readr::write_csv(df.trout, "data/csv/df_trout.csv")
 ```
 
 ```{r, echo=FALSE}
