@@ -1,5 +1,7 @@
 # troutr:  VA trout stocking
 
+See the write-up here:  https://nhoteling.github.io/troutr/
+
 Main Goal:  
 Can we build a model that will accurately predict when and where VA Department of Wildlife Recreation trout stocking events will take place?
 
