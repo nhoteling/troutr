@@ -1,0 +1,11 @@
+name: "Trout Stocking in Virginia"
+navbar:
+  title: ""
+  left:
+output_dir: "."
+output:
+  html_document:
+    theme: yeti
+    highlight: textmate
+#    include:
+#      after_body: _footer.html

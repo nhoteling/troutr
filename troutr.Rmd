@@ -41,6 +41,13 @@ df.locs <- readr::read_csv("data/water_body_locs.csv") %>%
 
 <hr>
 
+This project was undertaken as an effort to see if we can use temporal or spatio-temporal modeling to predict what and where trout stocking events will take place in Virginia.  Along the way, we take great liberties to apply interesting and new data analysis methods to tackle different aspects of the data.  This is a work in progress, but so far it looks like this,
+
+<ul>
+  <li>The section here is incomplete, but will provide a general overview of the analysis</li>
+  <li>The section on _Finding Trout Water Locations_ is more developed and describes how the trout waters were geolocated.  Along the way, we explore cool topics like _pairwise comparisons_, _locality-sensitive hashing_, and _Bayesian Analysis_.</li>
+</ul>
+
 The goal here is to see if we can predict when and where trout stocking will take place on a given date in the state of Virginia.
 
 <br>

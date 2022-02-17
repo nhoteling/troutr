@@ -40,3 +40,5 @@ vignettes/*.pdf
 
 data/gis
 archive
+.DS_Store
+data/.DS_Store
