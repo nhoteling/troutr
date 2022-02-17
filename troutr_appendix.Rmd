@@ -16,6 +16,8 @@ library(stringdist)
 library(osmdata)
 library(ggplot2)
 
+library(kableExtra)
+
 library(textreuse)
 
 source("R/utils.R")
@@ -38,7 +40,7 @@ df.trout <- readRDS("data/rds/dftrout.rds")
 df.trt <- df.trout %>% 
   dplyr::select(waterbody1, waterbody2, Category, specialtype, county) %>%
   distinct() %>%
-  mutate(id = paste0("trt-",row_number()))
+  mutate(id = sprintf("trt-%03d", row_number()))    #paste0("trt-",row_number()))
 ```
 
 
@@ -133,7 +135,7 @@ df.deq <- readRDS("data/rds/df_deq.rds")
 
 The Virginia Department of Environmental Quality (VDEQ) maintains an up-to-date [collection of datasets](https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets) related to rivers/streams, and lakes/reservoirs, plus a variety of other features.  Combining the rivers/streams and lakes/reservoirs data yields `r unique(df.deq$ID305B) %>% length() %>% format(big.mark=",")` unique bodies of water, or `r unique(df.deq$WATER_NAME) %>% length() %>% format(big.mark=",")` uniquely named bodies of water.  What's the difference?  Many of the bodies of water are divided into multiple segments and some are frequently-used names.  For example, the James River has `r df.deq %>% filter(WATER_NAME=="James River") %>% nrow()` sections outlined in the VDEQ data, and Mill Creek has `r df.deq %>% filter(WATER_NAME=="James River") %>% nrow()`.  If we look at the geographic distribution of the respective points, the difference becomes clear,
 
-```{r, echo=FALSE, out.width="50%"}
+```{r, echo=FALSE, out.width="60%", fig.align="center"}
 df.deq %>% 
   filter(WATER_NAME %in% c("James River", "Mill Creek")) %>% 
   ggplot() + 
@@ -159,11 +161,15 @@ Comparing water bodies between these two datasets is nontrivial.  As noted in th
   <li>Filter by jaccard distance</li>
 </ol>
 
-
+<details>
+<summary style="font-size:15px">CODE</summary>
 ```{r, message=FALSE, warning=FALSE}
-
+#
 # Pairwise comparisons
+#
 t0 <- Sys.time()
+
+
 d <- lapply(1:nrow(df.trt), function(i) {
   df.deq %>% 
     filter(county == df.trt$county[i]) %>%
@@ -172,44 +178,63 @@ d <- lapply(1:nrow(df.trt), function(i) {
            jc = stringdist::stringdist(waterbody1, WATER_NAME, method="jaccard",q=3),
            id = df.trt$id[i]) %>%
     filter(jc<0.50) %>%
-    arrange(jc) %>%
+    arrange(id, jc) %>%
     dplyr::select(id, waterbody1, ID305B, WATER_NAME, county, jc, source, coord)
 })
 
+
 df.cnd1 <- do.call(rbind, d)
 t1 <- Sys.time()
-
 DT_PR <- t1-t0
 ```
+</details>
+<br>
 
+The result is a list of candidate pairs that will be used later in the <b>Adjudication</b> step.  In the table below, a Jaccard score of zero means the names are identical.  Some things worth noting here, which will be discussed in greater depth later, 1) some cases return a single result with exact string match, 2) some cases return multiple results with exact string matches, 3) some cases return a mixture of exact and inexact string matches 4) some cases return only inexact string matches, and 5) some trout waters do not return any candidate pairs.  The adjudication step will need to account for each of these scenarios.  Some of these scenarios are evident in the sample printed below,
 
+```{r, echo=FALSE}
+df.cnd1 %>%
+  dplyr::select(id, waterbody1, WATER_NAME, jc) %>%
+  head(n=10) %>%
+  kbl(col.names=c("id","Trout Water", "VDEQ water", "Jaccard"), digits=2) %>%
+  kable_styling(full_width=FALSE) %>%
+  kable_paper()
+```
+
+<br>
 
 ### Locality-sensitive hashing
 
-Locality-sensitive hashing is an approximative technique that can be used to reduce the search space in cases where pairwise comparisons between datasets may become intractable.  The datasets we are working with don't quite meet that threshold, however it is interesting to go through the mechanics of LSH anyway.
+Locality-sensitive hashing is a technique that can be used to reduce the search space in cases where pairwise comparisons between datasets may become intractable.  The methodology, described [here](http://infolab.stanford.edu/~ullman/mmds/ch3n.pdf), takes an approximative approach that mimics the jaccard similarity.  The data we are working with here don't quite meet the threshold of intractability, however it is interesting to go through the mechanics of LSH anyway.
 
-The overarching goal here is to use the LSH techniques to create a list of candidate pairs.  Most of the necessary steps are carried out with the `textreuse` package (however we will do some quick pre-processing to tokenize the water body names via `tokenizers` since the built-in functionality tokenizes by _word_ whereas we want to tokenize by _character_),
+It's worth noting, however, that LSH is typically discussed within the context of finding similar/duplicate items within a large document corpus, whereas the problem being addressed here is specifically related to the comparison of two different datasets (this may or may not be strictly true; it's possible that this is a limitation of the specific implementation used here, or it might be related to my own lack of familiarity with the implementation).  
 
+The overarching goal here is to use LSH to create a list of candidate pairs.  Most of the necessary steps are carried out with the `textreuse` package, however since the implementation appears to be designed for use with longer documents, we will carry out some pre-processing steps to tokenize text by characters instead of the default, which is by word.
+
+<details>
+<summary style="font-size:15px">CODE</summary>
 ```{r}
 # Pre-processing: VDEQ data
 df.deq2 <- df.deq %>%
-  mutate(ngrams     = tokenizers::tokenize_character_shingles(WATER_NAME,        # tokenize by ngram
-                                                              n=3,
-                                                              strip_non_alphanum=FALSE,simplify=TRUE),  
+  mutate(ngrams     = tokenizers::tokenize_character_shingles(WATER_NAME, n=3,   # tokenize by ngram
+                                                              strip_non_alphanum=FALSE,
+                                                              simplify=TRUE),  
          len        = purrr::map_int(ngrams, length),                            # number of tokens
          txt_tokens = purrr::map_chr(ngrams, str_c,collapse=" "))                # prep for minhash
 
 
 # Pre-processing: VDWR data
 df.trt2 <- df.trt %>%
-  mutate(ngrams = tokenizers::tokenize_character_shingles(waterbody1, n=3,
+  mutate(ngrams     = tokenizers::tokenize_character_shingles(waterbody1, n=3,
                                                           strip_non_alphanum=FALSE,
                                                           simplify=TRUE),
-         len = purrr::map_int(ngrams, length),
+         len        = purrr::map_int(ngrams, length),
          txt_tokens = purrr::map_chr(ngrams, str_c, collapse=" "))
 ```
+</details>
+<br>
 
-We have tokenized the water body names into ngrams, where n=3.  It is useful to take a look at the number of ngrams per name for each dataset,
+In the present case the water body names are tokenized into ngrams, where n=3.  It is useful to take a look at the number of ngrams per name for each dataset,  
 
 ```{r, out.width="50%", echo=FALSE, message=FALSE, warning=FALSE, fig.pos="hold"}
 df.trt2 %>% 
@@ -226,16 +251,23 @@ df.deq2 %>%
   labs(title="VDEQ Water Bodies", x = "Number of ngrams per row", y="Count") +
   theme_minimal()
 ```
+The histograms show an interesting tri-modal feature, most evident in the VDEQ data.  Closer inspection reveals that most of the names in the VDEQ data with greater than 30 ngrams follow a pattern like "Unnamed tributary to...".  The peak around 20 mostly consists of more complex names in both datasets, such as those specifying "North Fork.." or "South Fork...", or something like ""Goose Creek/Crooked Run/Gap Run".
 
-The minhashing workflow here is based largely on the `textreuse` package [vignette](https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html).  We start by generating a minhash function and using that to create a document corpus containing all of the minhashed text strings.  The minhash function converts a collection of tokens (ngrams in our case) into `n` randomly selected hashes.  In the present dataset, there are `r df.trt2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` unique ngrams derived from the trout waters, and `r df.deq2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` from the VDEQ water body names.  These are mapped to 240 hashes,
+The minhashing workflow here is based largely on the `textreuse` package [vignette](https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html).  We start by generating a minhash function and using that to create a document corpus containing all of the minhashed ngrams.  The minhash function converts a collection of tokens into `n` randomly selected hashes.  In the present dataset, there are `r df.trt2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` unique ngrams derived from the trout waters, and `r df.deq2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` from the VDEQ water body names.  These are mapped to 240 hashes.
 
+<details>
+<summary style="font-size:15px">CODE</summary>
 ```{r}
 # Create minhash function
 minhash <- textreuse::minhash_generator(n=240, seed=1234)
 ```
+</details>
+<br>
 
-We create the document corpus consisting of all names from both datasets,
+The document corpus is created, which consists of all names from both datasets.
 
+<details>
+<summary style="font-size:15px">CODE</summary>
 ```{r}
 # Create a named vector of tokens for each row
 vec_tokens <- c(df.deq2$txt_tokens, df.trt2$txt_tokens)
@@ -249,8 +281,10 @@ corpus <- textreuse::TextReuseCorpus(text = vec_tokens, tokenizer = tokenizers::
 t1 <- Sys.time()
 DT_LS1 <- t1-t0
 ```
+</details>
+<br>
 
-Locality-sensitive hashing can now be carried out on the corpus.  The only remaining parameter is the number of bands to use in the computation.  This value approximates the threshold value for a jaccard similarity used to create the candidate pairs.  In the present case we will use $b=40$ since it leads to an approximate threshold of around 0.5.  
+Locality-sensitive hashing can now be carried out on the corpus.  The only remaining parameter is the number of bands to use in the computation.  The approximate threshold for jaccard similarity used to create the candidate pairs depends on this value.  In the present case $b=40$ is used since it leads to an approximate threshold of around 0.5.  
 
 
 ```{r, echo=FALSE, out.width="25%", eval=FALSE}
@@ -264,7 +298,8 @@ data.frame(b = v, similarity = unlist(d) %>% round(digits=3)) %>%
   kableExtra::kable_styling(full_width=FALSE)
 ```
 
-
+<details>
+<summary style="font-size:15px">CODE</summary>
 ```{r}
 t0 <- Sys.time()
 buckets_040    <- lsh(corpus, bands = 40, progress = FALSE)
@@ -272,9 +307,13 @@ candidates_040 <- lsh_candidates(buckets_040) %>% mutate(bands=40)
 t1 <- Sys.time()
 DT_LS2 <- t1-t0
 ```
+</details>
+<br>
 
-The result is a list of candidate pairs, nominally, pairs which will yield a jaccard similarity less than the theshold value implied by our choice of $b$.  With a little bit of post-processing we can generate a result analogous to what was produced above,
+The result is a list of candidate pairs, nominally, pairs which will yield a jaccard similarity less than the theshold value implied by the choice of $b$.  With a little bit of post-processing one can generate a result analogous to what was produced above,
 
+<details>
+<summary style="font-size:15px">CODE</summary>
 ```{r}
 t0 <- Sys.time()
 df.cnd2 <- candidates_040 %>%
@@ -290,6 +329,9 @@ t1 <- Sys.time()
 DT_LS3 <- t1-t0
 DT_LS <- DT_LS1 + DT_LS2 + DT_LS3
 ```
+</details>
+<br>
+
 
 ```{r, echo=FALSE, eval=FALSE}
 # One can also use textreuse to compute the similarity.
@@ -299,20 +341,160 @@ df.compare2 <- candidates_040 %>% filter(a %in% df.trt2$id) %>%
   arrange(a,desc(score))
 ```
 
+```{r, echo=FALSE}
+df.cnd2 %>%
+  dplyr::select(id, waterbody1, WATER_NAME, jc) %>%
+  head(n=10) %>%
+  kbl(col.names=c("id","Trout Water", "VDEQ water", "Jaccard"), digits=2) %>%
+  kable_styling(full_width=FALSE) %>%
+  kable_paper()
+```
+
+
+
 ### Comparison of Pairwise and LSH methods
 
-The Pairwise and LSH methods outlined above do more or less the same thing, to it is interesting to compare the
+In principle, the _Pairwise_ and _LSH_ methods outlined above do more or less the same thing, so it is interesting to do a quick comparison of the results.
 
-Now that we've done essentially the same thing using direct pairwise comparisons and Locality-sensitive hashing, it is possible to compare the results of each.  
+First, ignoring some of the pre-processing steps, the Pairwise method took about <b>`r DT_PR %>% as.numeric() %>% signif(digits=1)` s</b> to run, whereas the LSH method took around <b>`r DT_LS %>% as.numeric() %>% signif(digits=1)` s</b> to generate the corpus (`r DT_LS1 %>% as.numeric() %>% format(digits=1)`s), compute locality-sensitive hashes (`r DT_LS2 %>% as.numeric() %>% format(digits=1)`s), and carry out some light post-processing (`r DT_LS3 %>% as.numeric() %>% format(digits=1)`s).  Note that this not a completely fair comparison, and there may be more optimization to be carried out.  For example, the pairwise method doesn't compare all records with all other records; instead it compares each record from the trout data to all records in the VDEQ data _that are in the same county_.  In effect, we are carrying out a blocking process prior to the comparing the datasets.  In the LSH method detailed above this blocking step is carried out as part of the post-processing.  Not only that, but the corpus doesn't distinguish between datasets, so the LSH method is intrinsically comparing each record with all other records _in both datasets_.  
 
-First, ignoring some of the pre-processing steps, the Pairwise method took about <b>`r DT_PR %>% as.numeric() %>% format(digits=0)` s</b> to run, whereas the LSH method took <b>`r DT_LS %>% as.numeric() %>% format(digits=0)` s</b> to generate the corpus (`r DT_LS1 %>% as.numeric() %>% format(digits=1)`s), compute locality-sensitive hashes (`r DT_LS2 %>% as.numeric() %>% format(digits=1)`s), and carry out some light post-processing (`r DT_LS3 %>% as.numeric() %>% format(digits=1)`s).  
+Next, it is worth comparing the output of each method,
 
-It's not a completely fair comparison, and there may be more optimization to be carried out here.  For example, the pairwise method doesn't compare all records with all other records; instead it compares each record from the trout data to all records in the VDEQ data that are in the same county.  I haven't figured out how to add this blocking step ahead of the LSH workflow, so I do this as part of the post-processing step.  Not only that, but the corpus doesn't distinguish between datasets, so the LSH method is intrinsically comparing each record with all other records in both datasets.  There may be a better way to structure this, as the documentation for the `lsh()` function includes the statement, "it is possible, as long as one uses the same minhash function and the same number of bands, to combine the outputs from this function at different times".  With this in mind, I wonder if we can run the function on a subsets of the corpus??
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="48%", fig.show="hold"}
+p1 <- df.cnd1 %>% 
+  ggplot() + 
+  geom_histogram(aes(x=jc),bins=50) + 
+  lims(x=c(-0.05,1), y=c(0,500)) +
+  labs(title="Candidate Pairs: Pairwise Method",
+       subtitle=paste("Total Candidate Pairs:",nrow(df.cnd1)),
+       x="Jaccard Similarity", y="Count") +
+  theme_minimal()
 
+p2 <- df.cnd2 %>% 
+  ggplot() + 
+  geom_histogram(aes(x=jc),bins=50) + 
+  lims(x=c(-0.05,1), y=c(0,500)) +
+  labs(title="Candidate Pairs: Locality-Sensitive Hashing",
+       subtitle=paste("Total Candidate Pairs:",nrow(df.cnd2)),
+       x="Jaccard Similarity", y="Count") +
+  theme_minimal()
+
+p1
+p2
+```
+
+Notice that the Jaccard similarity shows a sharp cutoff at 0.5 for the Pairwise method, but the boundary is fuzzier with LSH.  This is a consequence of the latter being an approximate method.  It may be possible to refine the LSH parameters in a way so as to create a sharper cutoff. Also, the distribution of similarity scores is different for the two methods as the value becomes larger, however the number of exact matches is identical.  This has to do with the probabilistic nature of LSH. 
+
+<br>
 
 ### Adjudication
 
-TODO
+The candidate pairs identified above ideally represent the same waterways present in both datasets, however the reality is more complicated and nuanced.  For example, as was briefly mentioned above, there are five possible outcomes for each candidate pair,
+
+<ol>
+  <li>Single exact match</li>
+  <li>Multiple exact matches</li>
+  <li>Mixture of exact and inexact matches</li>
+  <li>Inexact matches</li>
+  <li>No candidates</li>
+</ol>
+
+During the adjudication process the goal will be to assign a likelihood value to each proposed candidate pair.  To do this, we will use Bayes Law,
+
+$$
+Pr(\theta | y) = \frac{Pr(y | \theta) Pr(\theta)}{Pr(y)}
+$$
+where,
+
+<ul>
+  <li>$Pr(\theta | y)$ is the probability that the candidate pair is correct, given similarity score $y$ </li>
+  <li>$Pr(y | \theta)$ is the probability of similarity score $y$, given the candidate pair is correct </li>
+  <li>$Pr(\theta)$ is the prior probability, or the probability that the candidate pair is correct </li>
+  <li>$Pr(y)$ is the probability of similarity score $y$</li>
+</ul>
+
+The value for $Pr(y | \theta)$ would nominally be determined from data.  For example, if a subset of the candidate pairs were adjudicated manually or otherwise known _a priori_, this information could be used to derive an expression for the probability of similarity score $y$, given a correct candidate pair.  Technically, this information is available in the present case since the brute-force method was carried out above.  However, this is not a typical scenario, so we will use this as a comparative method only.  If no information is available then we will need to come up with a "best guess" as to the relationship.  With this in mind, we assume that the likelihood drops off exponentially as a function of the similarity score, with the probability at $sim=0.1$ exactly half that of $sim=0.0$, and $sim=0.2$ half that of $sim=0.1$, and so on.  In other words, we assume the relation, $P = e^{-\lambda x}$, where $\lambda = \frac{ln(2)}{t_{1/2}}$ and $t_{1/2} = 0.1$,
+ 
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="50%", fig.align="center"}
+xs <- seq(0, 0.5, by=0.01)
+fctn <- function(x,T=0.1) {exp(-(log(2)/T)*x)}
+data.frame(x=xs, y=fctn(xs)) %>%
+  ggplot() +
+  geom_line(aes(x=x,y=y)) +
+  labs(x="Jaccard Similarity", y="Likelihood of a correct match") +
+  theme_minimal()
+
+```
+
+The value for $Pr(\theta)$ is the prior probability that the candidate pair is correct.  This depends on the number of candidate pairs, plus the possibility that _none_ of the candidate pairs are correct.  Assuming a uniform distribution, we use $\frac{1}{n+1}$, where $n$ is the number of candidate pairs.
+
+The normalization factor can be expanded to, 
+
+$$
+Pr(y) = \sum_{\theta}{Pr(\theta) Pr(y | \theta)}
+$$
+This will be evaluated for each candidate pair determined for a given trout water, plus the possibility that none of the candidates are correct.  Since there is no information as to the probability that none of the candidate pairs is correct, we are forced to come up with a "best guess".  Considering that the VDEQ dataset is supposed to be comprehensive, the likelihood that a given trout waterway is not present is likely very small.  However, there is also the possibility that the waterway is present, but the name is sufficiently different that it is not offered as a candidate pair.  Given these factors, we estimate that there is a 2% likelihood that the waterway is not represented as a candidate pair.
+
+<details>
+<summary style="font-size:15px">CODE</summary>
+```{r, message=FALSE, warning=FALSE}
+faker_frame <- function(n) {
+  data.frame(WATER_NAME = "None",
+             P_cn = 0.02,
+             P_pr = 1/(n+1))
+}
+
+bsn <- function(df) {
+  df %>%
+    mutate(P_cn = fctn(jc),
+           P_pr = 1/(nrow(df)+1)) %>%
+    bind_rows(faker_frame(nrow(df))) %>%
+    mutate(P_yy = sum(P_cn*P_pr),
+           P = P_cn*P_pr/P_yy)
+}
+
+df.adj1 <- df.cnd1 %>% 
+  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc)) %>%
+  mutate(data = purrr::map(data,bsn)) %>%
+  tidyr::unnest(cols=c(data))
+
+df.adj2 <- df.cnd2 %>% 
+  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc)) %>%
+  mutate(data = purrr::map(data,bsn)) %>%
+  tidyr::unnest(cols=c(data))
+```
+</details>
+<br>
+
+Combining all of this into Bayes Law gives normalized probability values for each candidate pair, plus an additional option that none are correct.  For example, a sample of the results is listed below (note that the probability sums to 1.0 for each trout water; in some cases this appears not to be the case due to rounding carried out for display purposes), 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+df.adj1 %>%
+  dplyr::select(id, waterbody1, WATER_NAME, jc, P) %>%
+  head(n=10) %>%
+  kbl(col.names=c("id","Trout Water", "VDEQ water", "Jaccard", "Probability"), digits=2) %>%
+  kable_styling(full_width=FALSE) %>%
+  kable_paper()
+```
+
+```{r}
+maxonly <- function(df) {
+  df %>% filter(P == max(P))
+}
+
+df.tst <- df.adj1 %>%
+  dplyr::select(id, waterbody1,ID305B, WATER_NAME, source,coord, jc,P) %>%
+  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc,P)) %>%
+  mutate(data = purrr::map(data, maxonly)) %>%
+  tidyr::unnest(cols=c(data))
+
+p <- df.tst %>%
+  ggplot() +
+  geom_jitter(aes(x=jc, y=P), alpha=0.7) +
+  theme_minimal()
+```
+
 
 <br>
 
