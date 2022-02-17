@@ -301,6 +301,8 @@ df.compare2 <- candidates_040 %>% filter(a %in% df.trt2$id) %>%
 
 ### Comparison of Pairwise and LSH methods
 
+The Pairwise and LSH methods outlined above do more or less the same thing, to it is interesting to compare the
+
 Now that we've done essentially the same thing using direct pairwise comparisons and Locality-sensitive hashing, it is possible to compare the results of each.  
 
 First, ignoring some of the pre-processing steps, the Pairwise method took about <b>`r DT_PR %>% as.numeric() %>% format(digits=0)` s</b> to run, whereas the LSH method took <b>`r DT_LS %>% as.numeric() %>% format(digits=0)` s</b> to generate the corpus (`r DT_LS1 %>% as.numeric() %>% format(digits=1)`s), compute locality-sensitive hashes (`r DT_LS2 %>% as.numeric() %>% format(digits=1)`s), and carry out some light post-processing (`r DT_LS3 %>% as.numeric() %>% format(digits=1)`s).  
@@ -334,7 +336,9 @@ OSM
 
 <ul>
   <li>MinHash vignette for the `textreuse` package [here](https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html)</li>
+  <li>The book chapter from [Mining Massive Datasets](http://infolab.stanford.edu/~ullman/mmds/ch3n.pdf)</li>
   <li>MinHash for dummies [post](http://matthewcasperson.blogspot.com/2013/11/minhash-for-dummies.html)</li>
   <li>A [Medium article](https://towardsdatascience.com/locality-sensitive-hashing-how-to-find-similar-items-in-a-large-set-with-precision-d907c52b05fc) on locality-sensitive hashing</li>
+  <li>An [illustrated guide](https://www.pinecone.io/learn/locality-sensitive-hashing/) to LSH</li>
   <li>Comments on using `tokenizers` output with `textreuse` [here](https://github.com/ropensci/textreuse/issues/75)</li>
 </ul>
