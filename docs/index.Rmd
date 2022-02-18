@@ -124,6 +124,7 @@ df.rvr <- sf::st_read("../data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_
 df.res <- sf::st_read("../data/gis/Reservoirs_(2020_Final_WQA_IR_Assessment)/Reservoirs_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
 
 df.deq <- readRDS("../data/rds/df_deq.rds")
+df.deqt <- readRDS("../data/rds/df_deq_t.rds")
 ```
 
 
@@ -144,6 +145,8 @@ df.deq %>%
 ```
 
 To a large degree these multiplicity issues can be resolved by filtering the data by county (whereas counties aren't explicitly listed in the VDEQ data, we derive these from shapes available from the [Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html)).  Rivers, however, may require an extra step towards disambiguation.  Nevertheless, it's worth noting that around 75% of the names have only a single entry, so these problems shouldn't be too pervasive.
+
+Note: after carrying out 90% of this analysis, I discovered that VDEQ has two additional datasets that are specifically labeled as Trout Rivers & Streams and Trout Lakes & Reservoirs.  We will revisit these datasets later. 
 
 
 ### Pairwise comparisons
@@ -472,40 +475,151 @@ df.adj1 %>%
   kable_paper()
 ```
 
-```{r, echo=FALSE, eval=FALSE}
-maxonly <- function(df) {
-  df %>% filter(P == max(P))
-}
 
-df.tst <- df.adj1 %>%
+A close inspection of the sample results listed in the table above doesn't reveal anything overly surprising.  For example, in the case of "Irish Creek" there were two exact string matches and each are assigned approximately a 50% chance of being correct, with a very small probability that none are correct. The results for "South Fork Holston River" are truncated in the table above, but there were 13 candidate pairs, 3 of which are exact string matches.  The model gives a 68% chance that one of these exact matches are correct, and a 32% chance that one of the ten other candidate pairs are correct (plus a tiny chance that none are correct).
+
+<br>
+
+#### Dealing with multiplicity
+
+In cases where a single trout water yielded two or more string matches with exactly the same name, it is useful to take a step back and consider that this likely are, in fact, the same waterways.  Recall the example above where the James River extended most of the way across the state, but it was divided into 41 individual segments.  Given this, we can deal with the multiplicity problem by simply merging these data together.  One way to check if this is reasonable is to aggregate by waterway, connect the dots between the candidate pairs, and compare with the waterway lines included in the original Rivers/Streams dataset,
+
+<details>
+<summary style="font-size:15px">CODE</summary>
+```{r, message=FALSE, warning=FALSE}
+# filter to just max prob
+maxonly <- function(df) {df %>% filter(P == max(P))}
+make_line <- function(lonlat) { lonlat %>% as.matrix() %>% sf::st_linestring() }
+
+
+df.mx1 <- df.adj1 %>%
   dplyr::select(id, waterbody1,ID305B, WATER_NAME, source,coord, jc,P) %>%
   tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc,P)) %>%
-  mutate(data = purrr::map(data, maxonly)) %>%
-  tidyr::unnest(cols=c(data))
+  mutate(data = purrr::map(data, maxonly),
+         len  = purrr::map_int(data,nrow)) %>%
+  tidyr::unnest(cols=c(data)) 
 
-p <- df.tst %>%
+df.mx2 <- df.mx1 %>%
+  filter(len>1) %>%
+  group_by(id) %>%
+  summarise(m = sf::st_coordinates(coord)) %>% 
+  arrange(id,m) %>%
+  tidyr::nest() %>%              
+  mutate(ln = purrr::map(data, make_line) %>% sf::st_sfc(crs=EPSG_WGS84),
+         coord2 = ln %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84)) 
+
+
+
+df.mx <- bind_rows(
+  df.mx1 %>% 
+    filter(len==1) %>%
+    dplyr::select(-ID305B, -source),
+  df.mx1 %>% 
+    filter(len>1) %>% 
+    group_by(id, waterbody1, WATER_NAME) %>% 
+    summarise(P=sum(P), jc=mean(jc), len=mean(len)) %>%
+    left_join(df.mx2 %>% dplyr::select(id, coord=coord2), by=c("id")))
+```
+</details>
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="60%", fig.align="center"}
+df.rv <- df.rvr %>%
+  mutate(geometry=geometry %>% sf::st_transform(4326)) %>%
+  filter(ID305B %in% df.mx1$ID305B)
+
+df.mx2 %>%
   ggplot() +
-  geom_jitter(aes(x=jc, y=P), alpha=0.7) +
-  theme_minimal()
+  geom_sf(data=vaco1, mapping=aes(geometry=geometry), size=0.2, fill="grey95", color="grey65") +
+  geom_sf(data=df.rv, mapping=aes(geometry=geometry), color="#74a9cf", size=0.5) +
+  geom_sf(aes(geometry=ln), size=0.2, color="grey20") +
+  theme_void()
+```
+
+With a few exceptions, the derived lines (black) more or less trace along the VDEQ (blue) waterways (in the original dataset these are represented as lines).  This implies that we can, in fact, combine identically-named waterways from the data. Once we combine the identical waterways and sum the respective probabilities we're left with a comprehensive list,
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+#
+# Do the whole analysis with the VDEQ Trout data instead, for comparison
+#
+
+df.deqt <- readRDS("../data/rds/df_deq_t.rds")
+
+
+#####
+d <- lapply(1:nrow(df.trt), function(i) {
+  df.deqt %>% 
+    filter(county == df.trt$county[i]) %>%
+    mutate(waterbody1 = df.trt$waterbody1[i],
+           jc = stringdist::stringdist(waterbody1, WATER_NAME, method="jaccard",q=3),
+           id = df.trt$id[i]) %>%
+    filter(jc<0.50) %>%
+    arrange(id, jc) %>%
+    dplyr::select(id, waterbody1, WQS_ID, WATER_NAME, county, jc, src, coord)
+})
+df.cndt <- do.call(rbind, d)
+#####
+
+
+
+#####
+df.adjt <- df.cndt %>% 
+  tidyr::nest(data=c(WQS_ID, WATER_NAME, src,coord, jc)) %>%
+  mutate(data = purrr::map(data,bsn)) %>%
+  tidyr::unnest(cols=c(data))
+#####
+
+
+
+#####
+df.mxt1 <- df.adjt %>%
+  dplyr::select(id, waterbody1,WQS_ID, WATER_NAME, src,coord, jc,P) %>%
+  tidyr::nest(data=c(WQS_ID, WATER_NAME, src,coord, jc,P)) %>%
+  mutate(data = purrr::map(data, maxonly),
+         len  = purrr::map_int(data,nrow)) %>%
+  tidyr::unnest(cols=c(data)) 
+
+df.mxt2 <- df.mxt1 %>%
+  filter(len>1) %>%
+  group_by(id) %>%
+  summarise(m = sf::st_coordinates(coord)) %>% 
+  arrange(id,m) %>%
+  tidyr::nest() %>%              
+  mutate(ln = purrr::map(data, make_line) %>% sf::st_sfc(crs=EPSG_WGS84),
+         coord2 = ln %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84)) 
+
+
+
+df.mxt <- bind_rows(
+  df.mxt1 %>% 
+    filter(len==1) %>%
+    dplyr::select(-WQS_ID, -src),
+  df.mxt1 %>% 
+    filter(len>1) %>% 
+    group_by(id, waterbody1, WATER_NAME) %>% 
+    summarise(P=sum(P), jc=mean(jc), len=mean(len)) %>%
+    left_join(df.mxt2 %>% dplyr::select(id, coord=coord2), by=c("id")))
+#####
+```
+
+
+
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="60%", fig.align="center"}
+df.mx %>% 
+  dplyr::select(id, waterbody1, WATER_NAME, P) %>%
+  head(n=10) %>%
+  kbl(col.names=c("id", "Trout Water", "VDEQ Water", "Probability"), digits=2) %>%
+  kable_styling(full_width=FALSE) %>%
+  kable_paper()
 ```
 
 <br>
 
-<b>There is still work to do.</b>  For example, now we need to use the probabilities to actually make a decision.  Also, we should compare the results with the "known" locations.  More to come soon...
 
-<br>
-
-
-```{r, echo=FALSE, eval=FALSE}
-# Try osmdata for geocoding
-#d <- lapply(1:nrow(df.mtch), function(i) {
-#  s <- paste(df.mtch$nm[i], ", VA",sep="")
-#  q <- osmdata::getbb(s) %>% bbox_to_pgon()
-#  df <- data.frame(nm=df.mtch$nm[i], osm=q %>% sf::st_sfc() %>% sf::st_set_crs(4326))
-#})
-#df.mtch3 <- df.mtch2 %>% left_join(do.call(rbind,d), by="nm")
-```
-
+<b>TODO: Compare results with "known" locations.</b>
 
 
 ## References

@@ -48,7 +48,7 @@ df.trt <- df.trout %>%
 <br>
 
 
-# Appendix: Finding Trout-Water Locations
+# Finding Trout-Water Locations
 
 Water bodies that are included in the Virginia Department of Wildlife Recreation (VDWR) trout stocking program can be browsed on an [interactive map](https://dgif-virginia.maps.arcgis.com/apps/webappviewer/index.html?id=441ed456c8664166bb735b1db6024e48), however there doesn't appear to be a simple way for the average user to download the location data.  For this reason, we explore some methods for determining these locations in the sections below.
 
@@ -68,9 +68,10 @@ As painful as this was, it was manageable (it took about 3-ish hours), and very 
 # First, download these files from:
 # https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets
 # Then read them with sf
-df.rvr <- sf::st_read("data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
-df.res <- sf::st_read("data/gis/Reservoirs_(2020_Final_WQA_IR_Assessment)/Reservoirs_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
-
+#df.rvr <- sf::st_read("data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
+#df.res <- sf::st_read("data/gis/Reservoirs_(2020_Final_WQA_IR_Assessment)/Reservoirs_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
+df.rvr <- sf::st_read("data/gis/Trout_Waters_(WQS_Streams___Rivers)/Trout_Waters_(WQS_Streams___Rivers).shp", quiet=TRUE)
+df.res <- sf::st_read("data/gis/Trout_Waters_(WQS_Lakes___Reservoirs)/Trout_Waters_(WQS_Lakes___Reservoirs).shp", quiet=TRUE)
 
 epsg_code <- spaceheater::get_epsg(df.rvr$geometry)
 EPSG_WGS84 <- spaceheater::epsg_wgs84()
@@ -86,16 +87,16 @@ find_county <- function(crd) {
 df.deq <- bind_rows(
   # Rivers & Streams
   df.rvr %>%
-  mutate(coord = geometry %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84),
-         source = "rvr") %>%
-  as_tibble() %>%
-  dplyr::select(ID305B, WATER_NAME, LOCATION, source, coord),
+    mutate(coord = geometry %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84),
+           src = "rvr") %>%
+    as_tibble() %>%
+    dplyr::select(GNIS_ID, GNIS_NAME, WATER_NAME, WQS_ID, SHAPE_Leng, src, coord),
   # Lakes & Reservoirs
   df.res %>% 
-      mutate(coord = geometry %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84),
-             source = "res") %>%
-      as_tibble() %>%
-      dplyr::select(ID305B, WATER_NAME, LOCATION, source, coord)
+    mutate(coord = geometry %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84),
+           src = "res") %>%
+    as_tibble() %>%
+    dplyr::select(GNIS_ID, GNIS_NAME, WATER_NAME, WQS_ID, SHAPE_Leng, src, coord),
 ) %>%
   mutate(county = purrr::map_chr(coord, find_county))
 
@@ -113,30 +114,37 @@ df.sub <- df.deq %>%
 
 
 df.deqx <- df.deq %>% 
-  left_join(df.sub %>% dplyr::select(ID305B, county2), by=c("ID305B")) %>%
+  left_join(df.sub %>% dplyr::select(WQS_ID, county2), by=c("WQS_ID")) %>%
   mutate(county = ifelse(is.na(county), county2, county)) %>%
   dplyr::select(-county2)
 
 
 # Save files
-saveRDS(df.deqx, "data/rds/df_deq.rds")
-readr::write_csv(df.deqx, "data/csv/df_deq.csv")
+saveRDS(df.deqx, "data/rds/df_deq_v02.rds")
+readr::write_csv(df.deqx, "data/csv/df_deq_v02.csv")
+
+saveRDS(df.rvr, "data/rds/df_rvr_v02.rds")
+saveRDS(df.res, "data/rds/df_res_v02.rds")
 ```
 
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
-df.rvr <- sf::st_read("data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
-df.res <- sf::st_read("data/gis/Reservoirs_(2020_Final_WQA_IR_Assessment)/Reservoirs_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
+#df.rvr <- sf::st_read("data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
+#df.res <- sf::st_read("data/gis/Reservoirs_(2020_Final_WQA_IR_Assessment)/Reservoirs_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE)
 
-df.deq <- readRDS("data/rds/df_deq.rds")
+df.rvr <- readRDS("data/rds/df_rvr_v02.rds")
+df.res <- readRDS("data/rds/df_res_v02.rds")
+df.deq <- readRDS("data/rds/df_deq_v02.rds")
 ```
 
 
 
-The Virginia Department of Environmental Quality (VDEQ) maintains an up-to-date [collection of datasets](https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets) related to rivers/streams, and lakes/reservoirs, plus a variety of other features.  Combining the rivers/streams and lakes/reservoirs data yields `r unique(df.deq$ID305B) %>% length() %>% format(big.mark=",")` unique bodies of water, or `r unique(df.deq$WATER_NAME) %>% length() %>% format(big.mark=",")` uniquely named bodies of water.  What's the difference?  Many of the bodies of water are divided into multiple segments and some are frequently-used names.  For example, the James River has `r df.deq %>% filter(WATER_NAME=="James River") %>% nrow()` sections outlined in the VDEQ data, and Mill Creek has `r df.deq %>% filter(WATER_NAME=="James River") %>% nrow()`.  If we look at the geographic distribution of the respective points, the difference becomes clear,
+The Virginia Department of Environmental Quality (VDEQ) maintains an up-to-date [collection of datasets](https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets) related to rivers/streams, and lakes/reservoirs, plus a variety of other features.  In fact, they even have data containing trout rivers/streams and trout lakes/reservoirs.  Combining the rivers/streams and lakes/reservoirs data yields `r unique(df.deq$WQS_ID) %>% length() %>% format(big.mark=",")` unique bodies of water, or `r unique(df.deq$WATER_NAME) %>% length() %>% format(big.mark=",")` _uniquely named_ bodies of water.  There are a couple of reasons for this.  First, the most common name by a significant margin is "Unnamed tributary", with `r df.deq %>% filter(WATER_NAME=="Unnamed tributary") %>% nrow() %>% format(big.mark=",")` occurrences.  To understand this one must consider that there are actually two separate fields with waterbody names.  According to the [data dictionary](https://apps.deq.virginia.gov/mapper_ext/DataFactSheets/Water_Watersheds/DEQFactSheetV1_WQSrivers.pdf) provided by VDEQ the first, "GNIS_NAME" refers to the "Geographic Names Information System waterbody name" and the second, "WATER_NAME" is the name "generally used by DEQ that the feature is associated with".  Looking at the data more closely it appears that the former is a primary waterway and the latter is a more precise name assigned to a tributary or other subsection of the waterbody.
+
+Another reason for the discrepancy between the number of waterbodies and the number of unique names is that many of the bodies of water are divided into multiple segments and some are frequently-used names.  For example, the James River has `r df.deq %>% filter(WATER_NAME=="James River") %>% nrow()` sections outlined in the VDEQ data, and Mill Creek has `r df.deq %>% filter(WATER_NAME=="Mill Creek") %>% nrow()`.  If we look at the geographic distribution of the respective points, the difference becomes clear,
 
 ```{r, echo=FALSE, out.width="60%", fig.align="center"}
-df.deq %>% 
+p <- df.deq %>% 
   filter(WATER_NAME %in% c("James River", "Mill Creek")) %>% 
   ggplot() + 
   geom_sf(data=vaco1, mapping=aes(geometry=geometry), size=0.2, fill="grey95", color="grey65") +
@@ -148,7 +156,7 @@ df.deq %>%
 
 ```
 
-To a large degree these multiplicity issues can be resolved by filtering the data by county (whereas counties aren't explicitly listed in the VDEQ data, we derive these from shapes available from the [Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html)).  Rivers, however, may require an extra step towards disambiguation.  Nevertheless, it's worth noting that around 75% of the names have only a single entry, so these problems shouldn't be too pervasive.
+In the plot above one can see that "Mill Creek", being dispersed throughout the trout water region of the state, is simply a common name.  On the other hand, "James River" is a major body of water, so the locations are more tightly packed.  In reality, there are quite a few additional entries for the James River, but they are assigned more precise names associated with sections and tributaries.  To some degree these multiplicity issues can be resolved by filtering the data by county (whereas counties aren't explicitly listed in the VDEQ data, we derive these from shapes available from the [Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html)).  
 
 
 ### Pairwise comparisons
@@ -179,7 +187,7 @@ d <- lapply(1:nrow(df.trt), function(i) {
            id = df.trt$id[i]) %>%
     filter(jc<0.50) %>%
     arrange(id, jc) %>%
-    dplyr::select(id, waterbody1, ID305B, WATER_NAME, county, jc, source, coord)
+    dplyr::select(id, waterbody1, WQS_ID, WATER_NAME, county, jc, src, coord)
 })
 
 
@@ -203,187 +211,6 @@ df.cnd1 %>%
 
 <br>
 
-### Locality-sensitive hashing
-
-Locality-sensitive hashing is a technique that can be used to reduce the search space in cases where pairwise comparisons between datasets may become intractable.  The methodology, described [here](http://infolab.stanford.edu/~ullman/mmds/ch3n.pdf), takes an approximative approach that mimics the jaccard similarity.  The data we are working with here don't quite meet the threshold of intractability, however it is interesting to go through the mechanics of LSH anyway.
-
-It's worth noting, however, that LSH is typically discussed within the context of finding similar/duplicate items within a large document corpus, whereas the problem being addressed here is specifically related to the comparison of two different datasets (this may or may not be strictly true; it's possible that this is a limitation of the specific implementation used here, or it might be related to my own lack of familiarity with the implementation).  
-
-The overarching goal here is to use LSH to create a list of candidate pairs.  Most of the necessary steps are carried out with the `textreuse` package, however since the implementation appears to be designed for use with longer documents, we will carry out some pre-processing steps to tokenize text by characters instead of the default, which is by word.
-
-<details>
-<summary style="font-size:15px">CODE</summary>
-```{r}
-# Pre-processing: VDEQ data
-df.deq2 <- df.deq %>%
-  mutate(ngrams     = tokenizers::tokenize_character_shingles(WATER_NAME, n=3,   # tokenize by ngram
-                                                              strip_non_alphanum=FALSE,
-                                                              simplify=TRUE),  
-         len        = purrr::map_int(ngrams, length),                            # number of tokens
-         txt_tokens = purrr::map_chr(ngrams, str_c,collapse=" "))                # prep for minhash
-
-
-# Pre-processing: VDWR data
-df.trt2 <- df.trt %>%
-  mutate(ngrams     = tokenizers::tokenize_character_shingles(waterbody1, n=3,
-                                                          strip_non_alphanum=FALSE,
-                                                          simplify=TRUE),
-         len        = purrr::map_int(ngrams, length),
-         txt_tokens = purrr::map_chr(ngrams, str_c, collapse=" "))
-```
-</details>
-<br>
-
-In the present case the water body names are tokenized into ngrams, where n=3.  It is useful to take a look at the number of ngrams per name for each dataset,  
-
-```{r, out.width="50%", echo=FALSE, message=FALSE, warning=FALSE, fig.pos="hold"}
-df.trt2 %>% 
-  ggplot() +
-  geom_histogram(aes(x=len), bins=25) +
-  lims(x=c(0,50)) +
-  labs(title="VDWR Trout Waters", x = "Number of ngrams per row", y="Count") +
-  theme_minimal()
-
-df.deq2 %>% 
-  ggplot() +
-  geom_histogram(aes(x=len), bins=25) +
-  lims(x=c(0,50)) +
-  labs(title="VDEQ Water Bodies", x = "Number of ngrams per row", y="Count") +
-  theme_minimal()
-```
-The histograms show an interesting tri-modal feature, most evident in the VDEQ data.  Closer inspection reveals that most of the names in the VDEQ data with greater than 30 ngrams follow a pattern like "Unnamed tributary to...".  The peak around 20 mostly consists of more complex names in both datasets, such as those specifying "North Fork.." or "South Fork...", or something like ""Goose Creek/Crooked Run/Gap Run".
-
-The minhashing workflow here is based largely on the `textreuse` package [vignette](https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html).  We start by generating a minhash function and using that to create a document corpus containing all of the minhashed ngrams.  The minhash function converts a collection of tokens into `n` randomly selected hashes.  In the present dataset, there are `r df.trt2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` unique ngrams derived from the trout waters, and `r df.deq2 %>% pull(ngrams) %>% unlist() %>% unique() %>% length() %>% format(big.mark=",")` from the VDEQ water body names.  These are mapped to 240 hashes.
-
-<details>
-<summary style="font-size:15px">CODE</summary>
-```{r}
-# Create minhash function
-minhash <- textreuse::minhash_generator(n=240, seed=1234)
-```
-</details>
-<br>
-
-The document corpus is created, which consists of all names from both datasets.
-
-<details>
-<summary style="font-size:15px">CODE</summary>
-```{r}
-# Create a named vector of tokens for each row
-vec_tokens <- c(df.deq2$txt_tokens, df.trt2$txt_tokens)
-names(vec_tokens) <- c(df.deq2$ID305B, df.trt2$id)
-
-# Generate corpus
-t0 <- Sys.time()
-corpus <- textreuse::TextReuseCorpus(text = vec_tokens, tokenizer = tokenizers::tokenize_ngrams, n = 3,
-                          minhash_func = minhash, keep_tokens = TRUE,
-                          progress = FALSE, simplify=TRUE)
-t1 <- Sys.time()
-DT_LS1 <- t1-t0
-```
-</details>
-<br>
-
-Locality-sensitive hashing can now be carried out on the corpus.  The only remaining parameter is the number of bands to use in the computation.  The approximate threshold for jaccard similarity used to create the candidate pairs depends on this value.  In the present case $b=40$ is used since it leads to an approximate threshold of around 0.5.  
-
-
-```{r, echo=FALSE, out.width="25%", eval=FALSE}
-v <- c(10, 15, 30, 40, 60, 80, 120, 240)
-d <- lapply(1:length(v), function(i) {
-  lsh_threshold(h=240, b=v[i])
-})
-data.frame(b = v, similarity = unlist(d) %>% round(digits=3)) %>%
-  kableExtra::kbl() %>%
-  kableExtra::kable_paper() %>%
-  kableExtra::kable_styling(full_width=FALSE)
-```
-
-<details>
-<summary style="font-size:15px">CODE</summary>
-```{r}
-t0 <- Sys.time()
-buckets_040    <- lsh(corpus, bands = 40, progress = FALSE)
-candidates_040 <- lsh_candidates(buckets_040) %>% mutate(bands=40)
-t1 <- Sys.time()
-DT_LS2 <- t1-t0
-```
-</details>
-<br>
-
-The result is a list of candidate pairs, nominally, pairs which will yield a jaccard similarity less than the theshold value implied by the choice of $b$.  With a little bit of post-processing one can generate a result analogous to what was produced above,
-
-<details>
-<summary style="font-size:15px">CODE</summary>
-```{r}
-t0 <- Sys.time()
-df.cnd2 <- candidates_040 %>%
-  filter(a %in% df.trt2$id) %>%
-  rename(id=a, ID305B=b) %>%
-  left_join(df.trt %>% dplyr::select(id, waterbody1, county), by=c("id")) %>%
-  left_join(df.deq %>% dplyr::select(ID305B, WATER_NAME, source, coord, county2=county), by=c("ID305B")) %>%
-  filter(county==county2) %>%
-  mutate(jc = stringdist::stringdist(waterbody1, WATER_NAME, method="jaccard",q=3)) %>%
-  arrange(id, jc) %>%
-  dplyr::select(id, waterbody1, ID305B, WATER_NAME, county, jc, source, coord)
-t1 <- Sys.time()
-DT_LS3 <- t1-t0
-DT_LS <- DT_LS1 + DT_LS2 + DT_LS3
-```
-</details>
-<br>
-
-
-```{r, echo=FALSE, eval=FALSE}
-# One can also use textreuse to compute the similarity.
-# I used the above method so I can compare with the pairwise method
-df.compare2 <- candidates_040 %>% filter(a %in% df.trt2$id) %>%
-  lsh_compare(corpus, jaccard_similarity, progress=FALSE) %>%
-  arrange(a,desc(score))
-```
-
-```{r, echo=FALSE}
-df.cnd2 %>%
-  dplyr::select(id, waterbody1, WATER_NAME, jc) %>%
-  head(n=10) %>%
-  kbl(col.names=c("id","Trout Water", "VDEQ water", "Jaccard"), digits=2) %>%
-  kable_styling(full_width=FALSE) %>%
-  kable_paper()
-```
-
-
-
-### Comparison of Pairwise and LSH methods
-
-In principle, the _Pairwise_ and _LSH_ methods outlined above do more or less the same thing, so it is interesting to do a quick comparison of the results.
-
-First, ignoring some of the pre-processing steps, the Pairwise method took about <b>`r DT_PR %>% as.numeric() %>% signif(digits=1)` s</b> to run, whereas the LSH method took around <b>`r DT_LS %>% as.numeric() %>% signif(digits=1)` s</b> to generate the corpus (`r DT_LS1 %>% as.numeric() %>% format(digits=1)`s), compute locality-sensitive hashes (`r DT_LS2 %>% as.numeric() %>% format(digits=1)`s), and carry out some light post-processing (`r DT_LS3 %>% as.numeric() %>% format(digits=1)`s).  Note that this not a completely fair comparison, and there may be more optimization to be carried out.  For example, the pairwise method doesn't compare all records with all other records; instead it compares each record from the trout data to all records in the VDEQ data _that are in the same county_.  In effect, we are carrying out a blocking process prior to the comparing the datasets.  In the LSH method detailed above this blocking step is carried out as part of the post-processing.  Not only that, but the corpus doesn't distinguish between datasets, so the LSH method is intrinsically comparing each record with all other records _in both datasets_.  
-
-Next, it is worth comparing the output of each method,
-
-```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="48%", fig.show="hold"}
-p1 <- df.cnd1 %>% 
-  ggplot() + 
-  geom_histogram(aes(x=jc),bins=50) + 
-  lims(x=c(-0.05,1), y=c(0,500)) +
-  labs(title="Candidate Pairs: Pairwise Method",
-       subtitle=paste("Total Candidate Pairs:",nrow(df.cnd1)),
-       x="Jaccard Similarity", y="Count") +
-  theme_minimal()
-
-p2 <- df.cnd2 %>% 
-  ggplot() + 
-  geom_histogram(aes(x=jc),bins=50) + 
-  lims(x=c(-0.05,1), y=c(0,500)) +
-  labs(title="Candidate Pairs: Locality-Sensitive Hashing",
-       subtitle=paste("Total Candidate Pairs:",nrow(df.cnd2)),
-       x="Jaccard Similarity", y="Count") +
-  theme_minimal()
-
-p1
-p2
-```
-
-Notice that the Jaccard similarity shows a sharp cutoff at 0.5 for the Pairwise method, but the boundary is fuzzier with LSH.  This is a consequence of the latter being an approximate method.  It may be possible to refine the LSH parameters in a way so as to create a sharper cutoff. Also, the distribution of similarity scores is different for the two methods as the value becomes larger, however the number of exact matches is identical.  This has to do with the probabilistic nature of LSH. 
 
 <br>
 
@@ -399,7 +226,7 @@ The candidate pairs identified above ideally represent the same waterways presen
   <li>No candidates</li>
 </ol>
 
-During the adjudication process the goal will be to assign a likelihood value to each proposed candidate pair.  To do this, we will use Bayes Law,
+During the adjudication process the goal will be to assign a likelihood value to each proposed candidate pair that will account for each of these scenarios.  To do this, we will use Bayes Law,
 
 $$
 Pr(\theta | y) = \frac{Pr(y | \theta) Pr(\theta)}{Pr(y)}
@@ -439,12 +266,14 @@ This will be evaluated for each candidate pair determined for a given trout wate
 <details>
 <summary style="font-size:15px">CODE</summary>
 ```{r, message=FALSE, warning=FALSE}
+# Add the possibility that none of the candidate pairs is correct
 faker_frame <- function(n) {
   data.frame(WATER_NAME = "None",
              P_cn = 0.02,
              P_pr = 1/(n+1))
 }
 
+# Calculate Prob with Bayes Law
 bsn <- function(df) {
   df %>%
     mutate(P_cn = fctn(jc),
@@ -454,20 +283,17 @@ bsn <- function(df) {
            P = P_cn*P_pr/P_yy)
 }
 
+# Pairwise data
 df.adj1 <- df.cnd1 %>% 
-  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc)) %>%
+  tidyr::nest(data=c(WQS_ID, WATER_NAME, src,coord, jc)) %>%
   mutate(data = purrr::map(data,bsn)) %>%
   tidyr::unnest(cols=c(data))
 
-df.adj2 <- df.cnd2 %>% 
-  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc)) %>%
-  mutate(data = purrr::map(data,bsn)) %>%
-  tidyr::unnest(cols=c(data))
 ```
 </details>
 <br>
 
-Combining all of this into Bayes Law gives normalized probability values for each candidate pair, plus an additional option that none are correct.  For example, a sample of the results is listed below (note that the probability sums to 1.0 for each trout water; in some cases this appears not to be the case due to rounding carried out for display purposes), 
+Combining all of this into Bayes Law gives normalized probability values for each candidate pair, plus an additional option that none are correct, 
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 df.adj1 %>%
@@ -478,29 +304,132 @@ df.adj1 %>%
   kable_paper()
 ```
 
-```{r}
-maxonly <- function(df) {
-  df %>% filter(P == max(P))
-}
+Something isn't quite right with this table.  The results for "Spring Run" are reasonable, where the two exact matches are each assigned 45% probability of being a correct match, the inexact matches are assigned significantly smaller values, and the "None" option even smaller.  This is reasonable.  However, notice that the results for "German River" in which the strings show an exact match, are assigned only a 1% chance of being correct.  The reason for this is that there are `r df.adj1 %>% filter(id=="trt-005") %>% nrow()-1` candidate pairs for this waterway, and all of them are exact string matches.
 
-df.tst <- df.adj1 %>%
-  dplyr::select(id, waterbody1,ID305B, WATER_NAME, source,coord, jc,P) %>%
-  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc,P)) %>%
-  mutate(data = purrr::map(data, maxonly)) %>%
-  tidyr::unnest(cols=c(data))
+This raises an interesting question as to how one should use the results here to make an assignment.  In this case, it's worth taking a step back and considering that these waterways are, in all likelihood, sections of the same waterway, and for our purposes we can treat them as such.
 
-p <- df.tst %>%
+<details>
+<summary style="font-size:15px">CODE</summary>
+```{r, message=FALSE, warning=FALSE}
+# filter to just max prob
+maxonly <- function(df) {df %>% filter(P == max(P))}
+make_line <- function(lonlat) { lonlat %>% as.matrix() %>% sf::st_linestring() }
+
+
+df.mx1 <- df.adj1 %>%
+  dplyr::select(id, waterbody1,WQS_ID, WATER_NAME, src,coord, jc,P) %>%
+  tidyr::nest(data=c(WQS_ID, WATER_NAME, src,coord, jc,P)) %>%
+  mutate(data = purrr::map(data, maxonly),
+         len  = purrr::map_int(data,nrow)) %>%
+  #filter(len>1) %>%
+  tidyr::unnest(cols=c(data)) 
+
+df.mx <- df.mx1 %>% 
+  group_by(id, waterbody1, WATER_NAME) %>%
+  summarise(P=sum(P),
+            jc=mean(jc))
+
+df.mx2 <- df.mx1 %>%
+  filter(len>1) %>%
+  group_by(id) %>%
+  summarise(m = sf::st_coordinates(coord)) %>% 
+  arrange(id,m) %>%
+  tidyr::nest() %>%              
+  mutate(ln = purrr::map(data, make_line) %>% sf::st_sfc()) 
+```
+</details>
+<br>
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="60%"}  
+df.rv <- df.rvr %>%
+  mutate(geometry=geometry %>% sf::st_transform(4326)) %>%
+  filter(WQS_ID %in% df.mx1$WQS_ID)
+
+p <- df.mx2 %>%
   ggplot() +
-  geom_jitter(aes(x=jc, y=P), alpha=0.7) +
-  theme_minimal()
+  geom_sf(data=vaco1, mapping=aes(geometry=geometry), size=0.2, fill="grey95", color="grey65") +
+  geom_sf(data=df.rv, mapping=aes(geometry=geometry), color="#74a9cf", size=0.5) +
+  geom_sf(aes(geometry=ln), size=0.2, color="grey20", alpha=0.7) +
+  theme_void()
 ```
 
 
+
+
+
+
+
+
+A close inspection of the sample results listed in the table above doesn't reveal anything overly surprising.  For example, in the case of "Irish Creek" there were two exact string matches and each are assigned approximately a 50% chance of being correct, with a very small probability that none are correct. The results for "South Fork Holston River" are truncated in the table above, but there were 13 candidate pairs, 3 of which are exact string matches.  The model gives a 68% chance that one of these exact matches are correct, and a 32% chance that one of the ten other candidate pairs are correct (plus a tiny chance that none are correct).
+
 <br>
 
-## Other Approaches
 
-OSM
+
+
+
+At the start of the last section we outlined five possible scenarios for candidate pairs.  The Bayesian model approach gives us the tools to address most of these scenarios, but there is still work to do.  For example, what to do about high multiplicity cases where there are multiple exact matches and what to do about cases where there are no candidate pairs at all?
+
+For multiplicity cases, it may be useful to take a step back and consider that these waterways may, in fact, be the exact same water body.  Recall the example above where the James River, which stretches across the state, is separated into 41 sections in the VDEQ data.  The results considered here are already filtered by county, and there is no guarantee that the trout stocking program divides waterway segments in the same way.  To illustrate this, we take all of the high-multiplicity cases, assume they are each sections of the same waterway, and effectively connect the dots between them.  We compare this to the true path of the waterway from the VDEQ data,
+
+<details>
+<summary style="font-size:15px">CODE</summary>
+```{r, message=FALSE, warning=FALSE}
+# filter to just max prob
+maxonly <- function(df) {df %>% filter(P == max(P))}
+make_line <- function(lonlat) { lonlat %>% as.matrix() %>% sf::st_linestring() }
+
+
+df.mx1 <- df.adj1 %>%
+  dplyr::select(id, waterbody1,ID305B, WATER_NAME, source,coord, jc,P) %>%
+  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc,P)) %>%
+  mutate(data = purrr::map(data, maxonly),
+         len  = purrr::map_int(data,nrow)) %>%
+  tidyr::unnest(cols=c(data)) 
+
+df.mx2 <- df.mx1 %>%
+  filter(len>1) %>%
+  group_by(id) %>%
+  summarise(m = sf::st_coordinates(coord)) %>% 
+  arrange(id,m) %>%
+  tidyr::nest() %>%              
+  mutate(ln = purrr::map(data, make_line) %>% sf::st_sfc(crs=EPSG_WGS84),
+         coord2 = ln %>% sf::st_transform(epsg_code) %>% sf::st_centroid() %>% sf::st_transform(EPSG_WGS84)) 
+
+
+
+df.mx <- bind_rows(
+  df.mx1 %>% 
+    filter(len==1) %>%
+    dplyr::select(-ID305B, -source),
+  df.mx1 %>% 
+    filter(len>1) %>% 
+    group_by(id, waterbody1, WATER_NAME) %>% 
+    summarise(P=sum(P), jc=mean(jc), len=mean(len)) %>%
+    left_join(df.mx2 %>% dplyr::select(id, coord=coord2), by=c("id")))
+```
+</details>
+<br>
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="60%"}  
+df.rv <- sf::st_read("data/gis/Rivers_(2020_Final_WQA_IR_Assessment)/Rivers_(2020_Final_WQA_IR_Assessment).shp", quiet=TRUE) %>%
+  mutate(geometry=geometry %>% sf::st_transform(4326)) %>%
+  filter(ID305B %in% df.mx1$ID305B)
+
+p <- df.mx %>%
+  ggplot() +
+  geom_sf(data=vaco1, mapping=aes(geometry=geometry), size=0.2, fill="grey95", color="grey65") +
+  geom_sf(data=df.rv, mapping=aes(geometry=geometry), color="#74a9cf", size=0.5) +
+  geom_sf(aes(geometry=ln), size=0.2, color="grey20") +
+  theme_void()
+```
+
+With a couple of exceptions, the strong overlap observed between derived lines (black) and VDEQ lines (blue) indicates that our hypothesis is correct for a vast majority of cases.  Closer inspection reveals a couple of exceptions to this, however since the error introduced from these discrepancies probably won't affect the predictive modeling efforts (and we will probably use the brute-force results anyway), we will accept these errors and move on.
+
+There are `r df.trt %>% filter(!(id %in% df.adj2$id)) %>% nrow()` trout waters that did not yield candidate pairs in the analysis above, which represents `r (100*(df.trt %>% filter(!(id %in% df.adj2$id)) %>% nrow())/(nrow(df.trt))) %>% format(digits=0)`% of the trout waters.  This seems surprisingly large, however a spot-check for "Cook Lake" in Alexandria, VA confirmed that it is, in fact, absent from VDWR data.  Similarly, Thompson WMA Lake is also absent from the VDEQ data.  It is possible that the reason for their absence is that these two lakes are man-made.
+
+<br>
+
 
 ```{r, echo=FALSE, eval=FALSE}
 # Try osmdata for geocoding

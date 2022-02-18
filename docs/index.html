@@ -273,8 +273,9 @@ $(document).ready(function () {
 <div id="vdeq-data" class="section level2">
 <h2>VDEQ Data</h2>
 <p>The Virginia Department of Environmental Quality (VDEQ) maintains an up-to-date <a href="https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets">collection of datasets</a> related to rivers/streams, and lakes/reservoirs, plus a variety of other features. Combining the rivers/streams and lakes/reservoirs data yields 7,135 unique bodies of water, or 4,277 uniquely named bodies of water. What’s the difference? Many of the bodies of water are divided into multiple segments and some are frequently-used names. For example, the James River has 41 sections outlined in the VDEQ data, and Mill Creek has 41. If we look at the geographic distribution of the respective points, the difference becomes clear,</p>
-<p><img src="index_files/figure-html/unnamed-chunk-4-1.png" width="60%" style="display: block; margin: auto;" /></p>
+<p><img src="index_files/figure-html/unnamed-chunk-6-1.png" width="60%" style="display: block; margin: auto;" /></p>
 <p>To a large degree these multiplicity issues can be resolved by filtering the data by county (whereas counties aren’t explicitly listed in the VDEQ data, we derive these from shapes available from the <a href="https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html">Census Bureau</a>). Rivers, however, may require an extra step towards disambiguation. Nevertheless, it’s worth noting that around 75% of the names have only a single entry, so these problems shouldn’t be too pervasive.</p>
+<p>Note: after carrying out 90% of this analysis, I discovered that VDEQ has two additional datasets that are specifically labeled as Trout Rivers &amp; Streams and Trout Lakes &amp; Reservoirs. We will revisit these datasets later.</p>
 <div id="pairwise-comparisons" class="section level3">
 <h3>Pairwise comparisons</h3>
 <p>Comparing water bodies between these two datasets is nontrivial. As noted in the section above describing the brute-force approach, there are several cases where misspellings, alternative spellings, ambiguous names, or missing data come into play. Add to this the multiplicities highlighted above for the VDEQ data. With all of this in mind, the strategy here will be to formulate a set of logical rules that will help us come up with a “best guess” as to which trout waters denoted in the VDWR data correspond to which water bodies in the VDEQ data. The initial procedure will look like this,</p>
@@ -503,7 +504,7 @@ df.trt2 &lt;- df.trt %&gt;%
 </details>
 <p><br></p>
 <p>In the present case the water body names are tokenized into ngrams, where n=3. It is useful to take a look at the number of ngrams per name for each dataset,</p>
-<p><img src="index_files/figure-html/unnamed-chunk-8-1.png" width="50%" /><img src="index_files/figure-html/unnamed-chunk-8-2.png" width="50%" /> The histograms show an interesting tri-modal feature, most evident in the VDEQ data. Closer inspection reveals that most of the names in the VDEQ data with greater than 30 ngrams follow a pattern like “Unnamed tributary to…”. The peak around 20 mostly consists of more complex names in both datasets, such as those specifying “North Fork..” or “South Fork…”, or something like “Goose Creek/Crooked Run/Gap Run”.</p>
+<p><img src="index_files/figure-html/unnamed-chunk-10-1.png" width="50%" /><img src="index_files/figure-html/unnamed-chunk-10-2.png" width="50%" /> The histograms show an interesting tri-modal feature, most evident in the VDEQ data. Closer inspection reveals that most of the names in the VDEQ data with greater than 30 ngrams follow a pattern like “Unnamed tributary to…”. The peak around 20 mostly consists of more complex names in both datasets, such as those specifying “North Fork..” or “South Fork…”, or something like “Goose Creek/Crooked Run/Gap Run”.</p>
 <p>The minhashing workflow here is based largely on the <code>textreuse</code> package <a href="https://cran.r-project.org/web/packages/textreuse/vignettes/textreuse-minhash.html">vignette</a>. We start by generating a minhash function and using that to create a document corpus containing all of the minhashed ngrams. The minhash function converts a collection of tokens into <code>n</code> randomly selected hashes. In the present dataset, there are 799 unique ngrams derived from the trout waters, and 4,804 from the VDEQ water body names. These are mapped to 240 hashes.</p>
 <details>
 <p><summary style="font-size:15px">CODE</summary></p>
@@ -719,9 +720,9 @@ Irish Creek
 <div id="comparison-of-pairwise-and-lsh-methods" class="section level3">
 <h3>Comparison of Pairwise and LSH methods</h3>
 <p>In principle, the <em>Pairwise</em> and <em>LSH</em> methods outlined above do more or less the same thing, so it is interesting to do a quick comparison of the results.</p>
-<p>First, ignoring some of the pre-processing steps, the Pairwise method took about <b>4 s</b> to run, whereas the LSH method took around <b>30 s</b> to generate the corpus (6s), compute locality-sensitive hashes (22s), and carry out some light post-processing (0.08s). Note that this not a completely fair comparison, and there may be more optimization to be carried out. For example, the pairwise method doesn’t compare all records with all other records; instead it compares each record from the trout data to all records in the VDEQ data <em>that are in the same county</em>. In effect, we are carrying out a blocking process prior to the comparing the datasets. In the LSH method detailed above this blocking step is carried out as part of the post-processing. Not only that, but the corpus doesn’t distinguish between datasets, so the LSH method is intrinsically comparing each record with all other records <em>in both datasets</em>.</p>
+<p>First, ignoring some of the pre-processing steps, the Pairwise method took about <b>3 s</b> to run, whereas the LSH method took around <b>30 s</b> to generate the corpus (6s), compute locality-sensitive hashes (21s), and carry out some light post-processing (0.2s). Note that this not a completely fair comparison, and there may be more optimization to be carried out. For example, the pairwise method doesn’t compare all records with all other records; instead it compares each record from the trout data to all records in the VDEQ data <em>that are in the same county</em>. In effect, we are carrying out a blocking process prior to the comparing the datasets. In the LSH method detailed above this blocking step is carried out as part of the post-processing. Not only that, but the corpus doesn’t distinguish between datasets, so the LSH method is intrinsically comparing each record with all other records <em>in both datasets</em>.</p>
 <p>Next, it is worth comparing the output of each method,</p>
-<p><img src="index_files/figure-html/unnamed-chunk-16-1.png" width="48%" /><img src="index_files/figure-html/unnamed-chunk-16-2.png" width="48%" /></p>
+<p><img src="index_files/figure-html/unnamed-chunk-18-1.png" width="48%" /><img src="index_files/figure-html/unnamed-chunk-18-2.png" width="48%" /></p>
 <p>Notice that the Jaccard similarity shows a sharp cutoff at 0.5 for the Pairwise method, but the boundary is fuzzier with LSH. This is a consequence of the latter being an approximate method. It may be possible to refine the LSH parameters in a way so as to create a sharper cutoff. Also, the distribution of similarity scores is different for the two methods as the value becomes larger, however the number of exact matches is identical. This has to do with the probabilistic nature of LSH.</p>
 <p><br></p>
 </div>
@@ -764,7 +765,7 @@ Pr(\theta | y) = \frac{Pr(y | \theta) Pr(\theta)}{Pr(y)}
 </li>
 </ul>
 <p>The value for <span class="math inline">\(Pr(y | \theta)\)</span> would nominally be determined from data. For example, if a subset of the candidate pairs were adjudicated manually or otherwise known <em>a priori</em>, this information could be used to derive an expression for the probability of similarity score <span class="math inline">\(y\)</span>, given a correct candidate pair. Technically, this information is available in the present case since the brute-force method was carried out above. However, this is not a typical scenario, so we will use this as a comparative method only. If no information is available then we will need to come up with a “best guess” as to the relationship. With this in mind, we assume that the likelihood drops off exponentially as a function of the similarity score, with the probability at <span class="math inline">\(sim=0.1\)</span> exactly half that of <span class="math inline">\(sim=0.0\)</span>, and <span class="math inline">\(sim=0.2\)</span> half that of <span class="math inline">\(sim=0.1\)</span>, and so on. In other words, we assume the relation, <span class="math inline">\(P = e^{-\lambda x}\)</span>, where <span class="math inline">\(\lambda = \frac{ln(2)}{t_{1/2}}\)</span> and <span class="math inline">\(t_{1/2} = 0.1\)</span>,</p>
-<p><img src="index_files/figure-html/unnamed-chunk-17-1.png" width="50%" style="display: block; margin: auto;" /></p>
+<p><img src="index_files/figure-html/unnamed-chunk-19-1.png" width="50%" style="display: block; margin: auto;" /></p>
 <p>The value for <span class="math inline">\(Pr(\theta)\)</span> is the prior probability that the candidate pair is correct. This depends on the number of candidate pairs, plus the possibility that <em>none</em> of the candidate pairs are correct. Assuming a uniform distribution, we use <span class="math inline">\(\frac{1}{n+1}\)</span>, where <span class="math inline">\(n\)</span> is the number of candidate pairs.</p>
 <p>The normalization factor can be expanded to,</p>
 <p><span class="math display">\[
@@ -992,9 +993,212 @@ South Fork Holston River
 </tr>
 </tbody>
 </table>
+<p>A close inspection of the sample results listed in the table above doesn’t reveal anything overly surprising. For example, in the case of “Irish Creek” there were two exact string matches and each are assigned approximately a 50% chance of being correct, with a very small probability that none are correct. The results for “South Fork Holston River” are truncated in the table above, but there were 13 candidate pairs, 3 of which are exact string matches. The model gives a 68% chance that one of these exact matches are correct, and a 32% chance that one of the ten other candidate pairs are correct (plus a tiny chance that none are correct).</p>
 <p><br></p>
-<p><b>There is still work to do.</b> For example, now we need to use the probabilities to actually make a decision. Also, we should compare the results with the “known” locations. More to come soon…</p>
+<div id="dealing-with-multiplicity" class="section level4">
+<h4>Dealing with multiplicity</h4>
+<p>In cases where a single trout water yielded two or more string matches with exactly the same name, it is useful to take a step back and consider that this likely are, in fact, the same waterways. Recall the example above where the James River extended most of the way across the state, but it was divided into 41 individual segments. Given this, we can deal with the multiplicity problem by simply merging these data together. One way to check if this is reasonable is to aggregate by waterway, connect the dots between the candidate pairs, and compare with the waterway lines included in the original Rivers/Streams dataset,</p>
+<details>
+<p><summary style="font-size:15px">CODE</summary></p>
+<pre class="r"><code># filter to just max prob
+maxonly &lt;- function(df) {df %&gt;% filter(P == max(P))}
+make_line &lt;- function(lonlat) { lonlat %&gt;% as.matrix() %&gt;% sf::st_linestring() }
+
+
+df.mx1 &lt;- df.adj1 %&gt;%
+  dplyr::select(id, waterbody1,ID305B, WATER_NAME, source,coord, jc,P) %&gt;%
+  tidyr::nest(data=c(ID305B, WATER_NAME, source,coord, jc,P)) %&gt;%
+  mutate(data = purrr::map(data, maxonly),
+         len  = purrr::map_int(data,nrow)) %&gt;%
+  tidyr::unnest(cols=c(data)) 
+
+df.mx2 &lt;- df.mx1 %&gt;%
+  filter(len&gt;1) %&gt;%
+  group_by(id) %&gt;%
+  summarise(m = sf::st_coordinates(coord)) %&gt;% 
+  arrange(id,m) %&gt;%
+  tidyr::nest() %&gt;%              
+  mutate(ln = purrr::map(data, make_line) %&gt;% sf::st_sfc(crs=EPSG_WGS84),
+         coord2 = ln %&gt;% sf::st_transform(epsg_code) %&gt;% sf::st_centroid() %&gt;% sf::st_transform(EPSG_WGS84)) 
+
+
+
+df.mx &lt;- bind_rows(
+  df.mx1 %&gt;% 
+    filter(len==1) %&gt;%
+    dplyr::select(-ID305B, -source),
+  df.mx1 %&gt;% 
+    filter(len&gt;1) %&gt;% 
+    group_by(id, waterbody1, WATER_NAME) %&gt;% 
+    summarise(P=sum(P), jc=mean(jc), len=mean(len)) %&gt;%
+    left_join(df.mx2 %&gt;% dplyr::select(id, coord=coord2), by=c(&quot;id&quot;)))</code></pre>
+</details>
 <p><br></p>
+<p><img src="index_files/figure-html/unnamed-chunk-23-1.png" width="60%" style="display: block; margin: auto;" /></p>
+<p>With a few exceptions, the derived lines (black) more or less trace along the VDEQ (blue) waterways (in the original dataset these are represented as lines). This implies that we can, in fact, combine identically-named waterways from the data.</p>
+<table class="table lightable-paper" style='width: auto !important; margin-left: auto; margin-right: auto; font-family: "Arial Narrow", arial, helvetica, sans-serif; margin-left: auto; margin-right: auto;'>
+<thead>
+<tr>
+<th style="text-align:left;">
+id
+</th>
+<th style="text-align:left;">
+Trout Water
+</th>
+<th style="text-align:left;">
+VDEQ Water
+</th>
+<th style="text-align:right;">
+Probability
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+trt-001
+</td>
+<td style="text-align:left;">
+Spring Run
+</td>
+<td style="text-align:left;">
+Spring Run
+</td>
+<td style="text-align:right;">
+0.89
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-005
+</td>
+<td style="text-align:left;">
+German River
+</td>
+<td style="text-align:left;">
+German River
+</td>
+<td style="text-align:right;">
+0.98
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-013
+</td>
+<td style="text-align:left;">
+Upper Passage Creek
+</td>
+<td style="text-align:left;">
+Passage Creek
+</td>
+<td style="text-align:right;">
+0.81
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-020
+</td>
+<td style="text-align:left;">
+Big Wilson Creek
+</td>
+<td style="text-align:left;">
+Big Wilson Creek
+</td>
+<td style="text-align:right;">
+0.66
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-027
+</td>
+<td style="text-align:left;">
+Wilson Creek
+</td>
+<td style="text-align:left;">
+Wilson Creek Upper
+</td>
+<td style="text-align:right;">
+0.35
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-029
+</td>
+<td style="text-align:left;">
+Peters Mill Creek
+</td>
+<td style="text-align:left;">
+Peters Mill Run
+</td>
+<td style="text-align:right;">
+0.21
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-035
+</td>
+<td style="text-align:left;">
+McFalls Creek
+</td>
+<td style="text-align:left;">
+McFalls Creek
+</td>
+<td style="text-align:right;">
+0.98
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-036
+</td>
+<td style="text-align:left;">
+Falls Hollow
+</td>
+<td style="text-align:left;">
+Falls Hollow
+</td>
+<td style="text-align:right;">
+0.98
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-040
+</td>
+<td style="text-align:left;">
+Sugar Hollow Reservoir
+</td>
+<td style="text-align:left;">
+Sugar Hollow Reservoir
+</td>
+<td style="text-align:right;">
+0.98
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+trt-041
+</td>
+<td style="text-align:left;">
+Douthat Lake
+</td>
+<td style="text-align:left;">
+Douthat Lake
+</td>
+<td style="text-align:right;">
+0.98
+</td>
+</tr>
+</tbody>
+</table>
+<p><br></p>
+<p><b>TODO: Compare results with “known” locations.</b></p>
+</div>
 </div>
 </div>
 <div id="references" class="section level2">
