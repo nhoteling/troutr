@@ -621,6 +621,21 @@ df.mx %>%
 
 <b>TODO: Compare results with "known" locations.</b>
 
+```{r, echo=FALSE, eval=FALSE}
+## Messing around ##
+newval <- function(v) {ifelse(v>0,v,0)}
+set.seed(1234)
+df <- data.frame(a=rbinom(200,1,0.1), 
+                 b=rbinom(200,1,0.1), 
+                 c=rbinom(200,1,0.1), 
+                 d=rbinom(200,1,0.1)) %>%
+  mutate_all(roll_mean,n=3, weights=c(0,1,1), align="right", fill=0) %>%
+  cor() %>%
+  as.data.frame() %>%
+  mutate_all(newval)
+df.new <- df/colSums(df)
+```
+
 
 ## References
 

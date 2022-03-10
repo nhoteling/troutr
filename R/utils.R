@@ -33,7 +33,9 @@ cleanup_trout_data <- function(df) {
 }
 
 
-make_point <- function(lon, lat, crs) {
+make_line <- function(lonlat) { lonlat %>% as.matrix() %>% sf::st_linestring() }
+
+make_point <- function(lon, lat, crs=4326) {
   sf::st_point(c(lon,lat)) %>% sf::st_sfc() %>% sf::st_set_crs(crs)
 }
 
