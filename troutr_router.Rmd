@@ -254,7 +254,7 @@ In the example below, the current-hex is depicted in black, and the next-hex pro
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="85%", fig.align="center"}
 hex0 <- df.prb$hex0 %>% unique()
-ggplot() +
+p.prb <- ggplot() +
   geom_sf(data=df.hex, aes(geometry=geometry),fill="grey95",color=NA) +
   geom_sf(data=df.prb, aes(geometry=geometry, fill=z), color="grey99",size=0.1) +
   geom_sf(data=df.hex %>% filter(hex==hex0), aes(geometry=geometry), fill="grey10") +
