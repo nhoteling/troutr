@@ -52,7 +52,7 @@ The goal here is to see if we can predict when and where trout stocking will tak
 
 <br>
 
-## Data
+## Data Description
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
 
@@ -63,7 +63,7 @@ end_date <- Sys.time()
 
 # Download the data; takes a hot minute
 res <- build_trout_url(start_date, end_date) %>%   
-  xml2::read_html(url1) %>% 
+  xml2::read_html() %>% 
   rvest::html_table(fill=TRUE)
 
 # Clean the data
@@ -81,7 +81,10 @@ df.trout <- readRDS("data/rds/dftrout.rds")
 
 The trout stocking schedule is posted on the Virginia Department of Wildlife Recreation (VDWR) [website](https://dwr.virginia.gov/fishing/trout-stocking-schedule/) and updated regularly during the trout seasons.  The date range presented on the table is user-configurable back to around `r min(df.trout$date) %>% format("%B %Y")` and, since a custom date range can be specified in the url, the data were downloaded with some simple webscraping.  The resulting dataset includes `r nrow(df.trout) %>% format(big.mark=",")` stocking events over `r unique(df.trout$waterbody1) %>% length()` unique bodies of water (although the number of unique locations is greater since some of these bodies of water are divided into multiple unique segments).
 
-Geocoding the trout stocking locations was more challenging.  The DWR website offers an [interactive map]() that allows users to search and view the appropriate water bodies, but there doesn't appear to be a straightforward way to export these for offline use.  Instead, the water bodies identified from the stocking schedule were manually searched on the map and the coordinates were recorded manually in an external file.  See Appendix for more details on the geocoding process.
+
+
+
+Geocoding the trout stocking locations was more challenging.  The DWR website offers an [interactive map](https://dgif-virginia.maps.arcgis.com/apps/webappviewer/index.html?id=441ed456c8664166bb735b1db6024e48) that allows users to search and view the appropriate water bodies, but there doesn't appear to be a straightforward way to export these for offline use.  Instead, the water bodies identified from the stocking schedule were manually searched on the map and the coordinates were recorded manually in an external file.  See Appendix for more details on the geocoding process.
 
 <br>
 
@@ -186,11 +189,11 @@ df.cgy <- df.trout %>%
   mutate(Category = ifelse(Category=="","X",Category),
          wk = lubridate::week(date),
          #wk2 = as.Date(paste(2021, wk-1, 1, sep="-"), "%Y-%U-%u"),
-         #yr = lubridate::year(date),
+         yr = lubridate::year(date),
          cgy = factor(Category, levels=rev(lev))) %>%
-  group_by(cgy,wk) %>%
+  group_by(cgy,wk,yr) %>%
   summarise(tot=n()) %>%
-  pivot_wider(id_cols=c("wk"), names_from=c("cgy"), values_from=c("tot"), values_fill=0) %>%
+  pivot_wider(id_cols=c("wk","yr"), names_from=c("cgy"), values_from=c("tot"), values_fill=0) %>%
   arrange(wk) %>%
   full_join(df.tmp) %>%
   dplyr::select(-nn)
@@ -213,6 +216,14 @@ p.fne <- ggplot(df.fne) +
   labs(x="Week Number", y="Value") +
   theme_minimal() +
   theme(axis.text.y = element_blank())
+
+p.tst <- df.cgy %>%
+  pivot_longer(cols=c("CR":"A")) %>%
+  mutate(cgy = factor(name, levels=rev(lev))) %>%
+  ggplot() +
+  geom_area(aes(x=wk, y=value, ymin=0, group=name), fill="firebrick", color="grey25", alpha=0.7) +
+  facet_grid(cgy~yr) +
+  theme_minimal()
 
 p.fne
 ```
@@ -292,6 +303,7 @@ p.spc <- df.trt %>%
   <li>Virginia Department of Wildlife Recreation [website](https://dwr.virginia.gov/fishing/trout-stocking-schedule/)</loi>
   <li>Virginia Department of Wildlife Recreation [interactive map](https://dgif-virginia.maps.arcgis.com/apps/webappviewer/index.html?id=441ed456c8664166bb735b1db6024e48)</li>
   <li>Virginia Department of Environmental Quality [datasets](https://geohub-vadeq.hub.arcgis.com/pages/Water%20Datasets)</li>
+  <li>[info sheet](https://dwr.virginia.gov/wp-content/uploads/media/catchable-trout-stocking-plan.pdf)</li>
 <ul>
 
 <hr>
