@@ -1,0 +1,386 @@
+---
+title: "Model dev"
+author: "Nathan Hoteling"
+date: '2022-06-17'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(stringdist)
+library(osmdata)
+library(ggplot2)
+library(lubridate)
+library(forecast)
+library(e1071)
+source("R/utils.R")
+```
+
+```{r data-loading, echo=FALSE, warning=FALSE, message=FALSE}
+## Load the data ##
+
+## Virginia shape
+va <- sf::st_read("data/gis/cb_2019_us_state_20m/cb_2019_us_state_20m.shp", quiet=TRUE) %>% 
+  filter(NAME=="Virginia") %>%
+  sf::st_transform(4326)
+
+## Virginia Counties
+vaco <- sf::st_read("data/gis/cb_2019_us_county_20m/cb_2019_us_county_20m.shp", quiet=TRUE) %>%
+  filter(STATEFP == "51") %>%
+  sf::st_transform(4326)
+
+# combine City/County with same name, to avoid confusion
+vaco2 <- vaco %>% group_by(NAME) %>% summarise(geometry = sf::st_union(geometry))
+
+
+# Locations, manually determined from interactive map on dwr website
+df.locs <- readr::read_csv("data/water_body_locs.csv") %>%
+  mutate(geometry = crd_to_points(lon,lat))
+
+df.trout <- readRDS("data/rds/df_trout.rds")
+```
+
+## Data exploration
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+p.map <- ggplot() +
+  geom_sf(data=vaco, mapping=aes(geometry=geometry), size=0.2, fill="grey95", color="grey65") +
+  geom_sf(data=df.locs, mapping=aes(geometry=geometry, color=Category), alpha=0.7) +
+  scale_fill_gradient(low="#ecc6c6", high="#bf4040") +
+  theme_void()
+
+p.map
+```
+
+
+## Empirical Orthogonal Functions
+
+Based on Statio-Temporal Statistics book.  Empirical Orthogonal Functions (EOFs) are essentially Principle Components Analysis applied to spatial data.  
+
+```{r empirical-orthogonal-functions, echo=FALSE, message=FALSE, warning=FALSE}
+## Data need to be in space-wide format, mean-corrected, and standardized
+# df.trt <- df.trout %>%
+#   left_join(df.locs %>% dplyr::select(waterbody1, waterbody2, geometry),
+#             by=c("waterbody1", "waterbody2")) %>%
+#   mutate(waterbody = paste0(waterbody1, ifelse(!is.na(waterbody2), paste0(" ",waterbody2),"")))
+
+
+date_range <- seq.Date(from=as.Date(min(df.trout$date, na.rm=TRUE)), 
+                       to=as.Date(max(df.trout$date, na.rm=TRUE)), 
+                       by="day") %>% as.data.frame()
+names(date_range) <- c("date")
+
+
+## Daily correlations
+df.grid1 <- df.trout %>% 
+  mutate(waterbody = paste0(waterbody1, ifelse(!is.na(waterbody2), paste0(" ",waterbody2),""))) %>%
+  group_by(date, waterbody) %>%
+  count() %>%
+  tidyr::pivot_wider(id_cols=c("date"),
+                     names_from=c("waterbody"),
+                     values_from=c("n"),
+                     values_fn=sum,
+                     values_fill=0) %>%
+  #mutate(date = as.Date(date)) %>%
+  full_join(date_range, by=c("date")) %>% 
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
+  arrange(date)
+
+m.grid1 <- as.matrix(df.grid1[,-1])
+```
+
+```{r svd, echo=FALSE, message=FALSE, warning=FALSE}
+### Based on Spatio-temporal stats text ###
+#
+
+# Find matrix that we need to subtract
+spat_mean <- apply(t(m.grid1), 1, mean)
+nT <- ncol(t(m.grid1))
+
+# Subtract and standardize
+Zspat_detrend <- m.grid1 - outer(rep(1,nT), spat_mean)
+Zt <- 1/sqrt(nT-1)*Zspat_detrend
+
+# Compute SVD
+E <- svd(Zt)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+V <- E$v
+colnames(V) <- paste0("EOF", 1:ncol(m.grid1))
+nm <- names(df.grid1)[-1]
+
+df.eof <- as.data.frame(V) %>% 
+  mutate(waterbody=nm) %>%
+  left_join(df.locs %>% 
+              mutate(waterbody = paste0(waterbody1, ifelse(!is.na(waterbody2), paste0(" ",waterbody2),""))), 
+            by=c("waterbody")) %>% 
+  dplyr::select(waterbody, Category, geometry,
+                EOF1, EOF2, EOF3, EOF4, EOF5, 
+                EOF6, EOF7, EOF8, EOF9, EOF10) %>%
+  tidyr::pivot_longer(cols=EOF1:EOF10) %>%
+  mutate(eof = factor(name, levels=c("EOF1", "EOF2", "EOF3","EOF4", "EOF5",
+                                     "EOF6", "EOF7", "EOF8", "EOF9", "EOF10"))) %>%
+  arrange(value)
+  
+
+p1 <- df.eof  %>%
+  ggplot() +
+  geom_sf(data=va, mapping=aes(geometry=geometry),fill=NA) +
+  geom_sf(aes(geometry=geometry, color=value)) +
+  scale_color_gradient2(low="#d73027", mid="#ffffbf", high="#1a9850") +
+  #scale_alpha(range=c(0.5,1.0)) +
+  facet_grid(eof~Category) +  
+  theme_void()
+
+# df.eof %>% dplyr::select(waterbody, EOF1, EOF2, EOF3, EOF4, EOF5, 
+#                                 EOF6, EOF7, EOF8, EOF9, EOF10, geometry) %>%
+#   arrange(EOF1, EOF2, EOF3, EOF4, EOF5, 
+#           EOF6, EOF7, EOF8, EOF9, EOF10) %>% head()
+
+# df.eof2 <- df.eof %>% dplyr::select(waterbody, EOF1, EOF2, EOF3, EOF4, EOF5, 
+#                                 EOF6, EOF7, EOF8, EOF9, EOF10, geometry) %>%
+#   tidyr::pivot_longer(cols=EOF1:EOF10) %>%
+#   mutate(water = forcats::as_factor(waterbody),
+#          eof = factor(name, levels=c("EOF1", "EOF2", "EOF3","EOF4", "EOF5",
+#                                      "EOF6", "EOF7", "EOF8", "EOF9", "EOF10")))
+
+p11 <- df.eof %>% 
+  mutate(water = forcats::as_factor(waterbody)) %>%
+  ggplot() +
+  geom_tile(aes(x=eof, y=forcats::fct_reorder(water, Category), fill=value)) +
+  scale_fill_gradient2(low="#fc8d59", mid="#ffffbf", high="#91cf60") +
+  theme_minimal()
+```
+
+```{r}
+TS <- data.frame(E$u) %>%
+  mutate(t = 1:nrow(E$u)) %>%
+  gather(EOF, PC, -t) %>%
+  mutate(nPC = PC*sqrt(nT-1))
+
+df.ts <- TS %>% filter(EOF %in% paste0("X",1:6))
+
+p2 <- df.ts %>%
+  ggplot() +
+  geom_line(aes(x=t,y=nPC)) +
+  facet_wrap(~EOF) +
+  scale_x_continuous(limits = c(0,650)) +
+  theme_minimal()
+
+p3 <- df.ts %>%
+  ggplot() +
+  geom_tile(aes(x=t, y=waterway,fill=EOF)) +
+  facet_wrap(~EOF) +
+  theme_minimal()
+```
+
+
+
+## Fit a model
+
+```{r}
+
+```
+
+
+
+
+## Other things to work on
+
+
+
+
+```{r, include=FALSE, eval=FALSE}
+df.trout <- readRDS("data/rds/df_trout.rds")
+
+date_range <- seq.Date(from=as.Date(min(df.trout$date, na.rm=TRUE)), 
+                       to=as.Date(max(df.trout$date, na.rm=TRUE)), 
+                       by="day") %>% as.data.frame()
+names(date_range) <- c("date")
+week_range <- date_range %>% mutate(wk = floor_date(date, unit="week")) %>%
+  dplyr::select(-date) %>% distinct()
+
+
+## Daily trout stocking, in space-wide format
+df.grid1 <- df.trout %>% 
+  group_by(date, waterbody1) %>%
+  count() %>%
+  tidyr::pivot_wider(id_cols=c("date"),
+                     names_from=c("waterbody1"),
+                     values_from=c("n"),
+                     values_fn=sum,
+                     values_fill=0) %>%
+  #mutate(date = as.Date(date)) %>%
+  full_join(date_range, by=c("date")) %>% 
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
+  arrange(date)
+
+## Weekly correlations
+df.grid2 <- df.trout %>% 
+  mutate(wk = floor_date(date, unit="week")) %>%
+  group_by(wk, waterbody1) %>%
+  count() %>%
+  tidyr::pivot_wider(id_cols=c("wk"),
+                     names_from=c("waterbody1"),
+                     values_from=c("n"),
+                     values_fn=sum,
+                     values_fill=0) %>%
+  #mutate(date = as.Date(date)) %>%
+  full_join(week_range, by=c("wk")) %>% 
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
+  arrange(wk)
+```
+
+
+```{r, include=FALSE, eval=FALSE}
+m.cor1 <- cor(df.grid1[,c(-1)])
+m.cor2 <- cor(df.grid2[,c(-1)])
+
+nm1 <- names(m.cor1[,1])
+df.cor1 <- m.cor1 %>% as.data.frame() %>%
+  mutate(idx = row_number()) %>%
+  tidyr::pivot_longer(cols = c(-idx)) %>%
+  mutate(name2 = nm1[idx])
+
+nm2 <- names(m.cor2[,1])
+df.cor2 <- m.cor2 %>% as.data.frame() %>%
+  mutate(idx = row_number()) %>%
+  tidyr::pivot_longer(cols = c(-idx)) %>%
+  mutate(name2 = nm2[idx])
+
+p1 <- df.cor1 %>% 
+  filter(name != name2) %>%
+  ggplot() +
+  geom_tile(aes(x=name, y=name2, fill=value)) +
+  scale_fill_gradient(low="grey80", high="firebrick") +
+  theme_minimal()
+
+p2 <- df.cor2 %>% 
+  filter(name != name2) %>%
+  ggplot() +
+  geom_tile(aes(x=name, y=name2, fill=value)) +
+  scale_fill_gradient(low="grey80", high="firebrick") +
+  theme_minimal()
+```
+
+
+## Fit some models
+
+
+```{r, include=FALSE, eval=FALSE}
+# Date Range for the data
+date_range <- seq.Date(from=as.Date(min(df.trout$date, na.rm=TRUE)), 
+                       to=as.Date(max(df.trout$date, na.rm=TRUE)), 
+                       by="day")
+df.dt <- data.frame(date=date_range, n=0)
+
+
+# Some trout data manipulation
+df.trt <- df.trout %>% 
+  mutate(n=1) %>%
+  #left_join(df.dt, by=c("date")) %>%
+  mutate(wk = week(date),
+         dow = wday(date)) %>%
+  group_by(county_string, Category, species, specialtype, wk, dow) %>%
+  mutate() %>%
+  summarise(n=sum(n)) %>%
+  mutate(yn = ifelse(n>0,1,0) %>% factor(levels=c(0,1), labels=c("No","Yes")),
+         county_string = as.factor(county_string),
+         Category = as.factor(Category),
+         species = as.factor(species),
+         specialtype = as.factor(specialtype)) %>%
+  ungroup() %>%
+  dplyr::select(-county_string) %>%
+  mutate(species = ifelse(species=="","X",species),
+         specialtype = ifelse(is.na(specialtype),"none",specialtype)) %>%
+  tidyr::pivot_wider(id_cols=c("wk", "dow", "Category", "species"),
+                     names_from = c("specialtype"),
+                     values_from = c("specialtype"),
+                     values_fn = length,
+                     values_fill=0)
+names(df.trt) <- c("wk","dow","category","species","tp_none", "tp_NSF","tp_NFW", "tp_NSF_NFW", "tp_HDW_NFW",
+                   "tp_DHW_NFW", "tp_DHW","tp_YTH","tp_FFA","tp_HDW","tp_FFA_HDW","tp_YTH_NFW")
+
+# Adjust the special types
+df.dat <- df.trt %>%
+  mutate(tp_NSF = tp_NSF + tp_NSF_NFW,
+         tp_NFW = tp_NFW + tp_NSF_NFW + tp_HDW_NFW + tp_DHW_NFW + tp_YTH_NFW,
+         tp_DHW = tp_DHW + tp_DHW_NFW,
+         tp_YTH = tp_YTH + tp_YTH_NFW,
+         tp_FFA = tp_FFA + tp_FFA_HDW,
+         tp_HDW = tp_HDW + tp_HDW_NFW + tp_FFA_HDW) %>%
+  dplyr::select(wk, dow, category, tp_none, tp_NSF, tp_NFW, tp_DHW, tp_YTH, tp_FFA, tp_HDW) %>%
+  tidyr::pivot_longer(cols=starts_with("tp_"), names_to="type") %>% 
+  filter(!is.na(value)) %>%
+  distinct()
+
+
+
+df.wkdy <- list(wk = 1:max(df.dat$wk),
+          dow = 1:7,
+          category = unique(df.dat$category),
+          type = unique(df.dat$type)) %>%
+  expand.grid(stringsAsFactors = FALSE)
+
+df.mod0 <- df.wkdy %>% 
+  left_join(df.dat, by=c("wk","dow","category","type")) %>%
+  mutate(value = ifelse(is.na(value),0,value)) %>%
+  group_by(wk,dow,category,type) %>%
+  summarise(n=sum(value)) %>%
+  mutate(yn = ifelse(n>0,1,0) %>% factor(levels=c(0,1), labels=c("No","Yes")))
+
+
+
+
+ft.lgc <- glm(yn ~  category + type + wk + dow,
+          family = binomial(),
+          data = df.tmp)
+
+set.seed(1234)
+ft.svm <- svm(yn ~ category + type + wk + dow, data=df.tmp, probability=TRUE)
+
+
+# p <- df.trt %>% 
+#   #mutate(yr = year(wk), wk2 = week(wk)) %>% 
+#   mutate(yr = year(date), dy = yday(date), wk=week(date), dow=wday(date)) %>% 
+#   filter(yr==2018) %>%
+#   ggplot() +
+#   geom_sf(data=va, aes(geometry=geometry), fill=NA, color="grey75") +
+#   geom_sf(aes(geometry=geometry, color=n)) +
+#   scale_color_gradient(low="grey50", high="grey50") +
+#   facet_grid(wk~dow) +
+#   theme_void() +
+#   theme(legend.position="none")
+```
+
+
+```{r}
+
+df.chk <- df.dt %>% 
+  dplyr::select(-n) %>%
+  filter(date > as.Date("2021-07-01")) %>%
+  mutate(wk = week(date),
+         dow = wday(date)) %>%
+  left_join(df.wkdy, by=c("wk", "dow"))
+
+prob.lgc <- predict(ft.lgc, df.chk, type="response")
+prob.svm <- predict(ft.svm, df.chk, probability=TRUE) %>% 
+  attr("probabilities") %>% as.data.frame()
+
+df.chk$lgc <- prob.lgc
+df.chk$svm <- prob.svm$Yes
+
+p.chk <- df.chk %>% filter(type=="tp_none") %>%
+  ggplot() +
+  geom_line(aes(x=date, y=svm)) +
+  facet_wrap(~category, ncol=1) +
+  theme_bw()
+```
+
+
